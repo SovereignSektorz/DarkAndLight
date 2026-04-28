@@ -21,6 +21,10 @@ import { IEditorService } from '../../../../services/editor/common/editorService
 import { ITextModel } from '../../../../../editor/common/model.js';
 import { IEditor } from '../../../../../editor/common/editorCommon.js';
 import { isLocation } from '../../../../../editor/common/languages.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
+import { AgentMemory } from './agentMemory.js';
+import { ConversationCompactor } from './conversationCompactor.js';
 
 const OLLAMA_AGENT_ID = 'ollama.local';
 const OLLAMA_AGENT_NAME = 'ollama';
@@ -68,7 +72,7 @@ const MAX_TOTAL_SOURCE_SIZE = 1.5 * 1024 * 1024;
 export class OllamaChatAgent extends Disposable {
 	private readonly _logService: ILogger;
 
-	/** Cached workspace data */
+	/** Cached workspace data (legacy fallback when smart context is disabled) */
 	private _cachedTree: string | undefined;
 	private _cachedSourceFiles: string | undefined;
 	private _lastScanTime = 0;
@@ -76,19 +80,28 @@ export class OllamaChatAgent extends Disposable {
 
 	constructor(
 		private readonly ollamaProvider: OllamaLanguageModelProvider,
+		private readonly _chunkIndex: WorkspaceChunkIndex,
+		private readonly _agentMemory: AgentMemory,
+		private readonly _conversationCompactor: ConversationCompactor,
 		@IChatAgentService private readonly chatAgentService: IChatAgentService,
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@IEditorService private readonly editorService: IEditorService,
 		@ILoggerService private readonly loggerService: ILoggerService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
 		this._logService = this._register(this.loggerService.createLogger('ollama', { name: 'Dark Matter' }));
 
+		// Load persistent memory
+		this._agentMemory.load().catch(err => {
+			this._logService.warn(`[Ollama] Failed to load agent memory: ${err}`);
+		});
+
 		this.registerAgent();
 
-		// Kick off initial workspace scan asynchronously
+		// Kick off initial workspace scan asynchronously (legacy fallback)
 		this.scanWorkspace().catch(err => {
 			this._logService.warn(`[Ollama] Initial workspace scan failed: ${err}`);
 		});
@@ -318,28 +331,69 @@ export class OllamaChatAgent extends Disposable {
 	// System Prompt
 	// ========================================================================
 
-	private async buildSystemPrompt(): Promise<string> {
-		await this.scanWorkspace();
+	private async buildSystemPrompt(userMessage: string): Promise<string> {
+		const smartEnabled = this.configurationService.getValue<boolean>('ollamaAgent.smartContext.enabled') !== false;
 
 		const parts: string[] = [
 			'You are a helpful AI coding assistant integrated directly into the Dark Matter IDE.',
 			'You have FULL ACCESS to the user\'s entire workspace.',
-			'Below you will find:',
-			'1. The complete project directory tree',
-			'2. The FULL SOURCE CODE of every file in the project',
-			'',
-			'You can reference any file or function by name. You know the entire codebase.',
 			'Help with code, debugging, architecture, and general programming questions.',
 			'Format your responses with markdown when appropriate.',
 			'',
-			'=== PROJECT DIRECTORY TREE ===',
-			this._cachedTree || '(scanning...)',
 		];
 
-		if (this._cachedSourceFiles) {
+		if (smartEnabled && this._chunkIndex.isReady) {
+			// === SMART CONTEXT MODE ===
+			// Build relevance context
+			const activeEditor = this.editorService.activeEditor;
+			const openEditorPaths: string[] = [];
+			for (const editor of this.editorService.editors) {
+				if (editor.resource) { openEditorPaths.push(editor.resource.fsPath); }
+			}
+
+			const relevanceCtx: RelevanceContext = {
+				activeFilePath: activeEditor?.resource?.fsPath,
+				userMessage,
+				openEditorPaths,
+			};
+
+			const { overview, relevantFiles } = this._chunkIndex.getRelevantContext(relevanceCtx);
+
+			// Workspace overview
+			if (overview) {
+				parts.push(overview);
+				parts.push('');
+			}
+
+			// Relevant file summaries
+			if (relevantFiles.length > 0) {
+				parts.push(`=== RELEVANT FILES (${relevantFiles.length} most relevant) ===`);
+				for (const file of relevantFiles) {
+					parts.push(`**${file.relativePath}**: ${file.summary}`);
+					if (file.keyExports.length > 0) {
+						parts.push(`  Exports: ${file.keyExports.join(', ')}`);
+					}
+				}
+				parts.push('');
+			}
+		} else {
+			// === LEGACY MODE (fallback) ===
+			await this.scanWorkspace();
+			parts.push('=== PROJECT DIRECTORY TREE ===');
+			parts.push(this._cachedTree || '(scanning...)');
+
+			if (this._cachedSourceFiles) {
+				parts.push('');
+				parts.push('=== FULL SOURCE CODE OF ALL PROJECT FILES ===');
+				parts.push(this._cachedSourceFiles);
+			}
+		}
+
+		// Persistent memory
+		const memorySection = this._agentMemory.buildPromptSection();
+		if (memorySection) {
 			parts.push('');
-			parts.push('=== FULL SOURCE CODE OF ALL PROJECT FILES ===');
-			parts.push(this._cachedSourceFiles);
+			parts.push(memorySection);
 		}
 
 		// Active editor
@@ -415,26 +469,43 @@ export class OllamaChatAgent extends Disposable {
 
 		const messages: OllamaChatMessage[] = [];
 
-		// System prompt — contains FULL project tree + all source code
-		const systemPrompt = await this.buildSystemPrompt();
+		// System prompt — uses smart context (chunk index + memory) or legacy fallback
+		const systemPrompt = await this.buildSystemPrompt(request.message);
 		this._logService.info(`[Ollama] System prompt size: ${Math.round(systemPrompt.length / 1024)}KB`);
 		messages.push({ role: 'system', content: systemPrompt });
 
-		// Conversation history
-		for (const entry of history) {
-			messages.push({ role: 'user', content: entry.request.message });
-			if (entry.response) {
-				const responseTexts: string[] = [];
-				for (const part of entry.response) {
-					if (part.kind === 'markdownContent') {
-						responseTexts.push(part.content.value);
-					}
-				}
-				if (responseTexts.length > 0) {
-					messages.push({ role: 'assistant', content: responseTexts.join('\n') });
-				}
-			}
+		// Conversation history — use compactor if enabled
+		const maxContextWindow = this.configurationService.getValue<number>('ollamaAgent.maxContextWindow') || 131072;
+		const workspaceBudgetPct = this.configurationService.getValue<number>('ollamaAgent.smartContext.workspaceBudgetPercent') || 30;
+		const systemPromptTokens = Math.ceil(systemPrompt.length / 4);
+		const remainingAfterSystem = maxContextWindow - systemPromptTokens;
+		const responseBudget = Math.floor(maxContextWindow * 0.25); // 25% reserved for response generation
+		const historyBudget = Math.max(remainingAfterSystem - responseBudget, 2000);
+
+		this._logService.info(`[Ollama] Token budget: ctx=${maxContextWindow}, system=~${systemPromptTokens}, historyBudget=~${historyBudget}, responseBudget=~${responseBudget}`);
+
+		const compacted = await this._conversationCompactor.compactHistory(history, Math.max(historyBudget, 2000), token);
+
+		// Inject conversation recap if compacted
+		if (compacted.recap) {
+			messages.push({
+				role: 'user',
+				content: `[Conversation Recap - ${compacted.compactedTurnCount} earlier turns summarized]\n${compacted.recap}`,
+			});
+			messages.push({
+				role: 'assistant',
+				content: 'Understood. I have the context from our earlier conversation.',
+			});
+			this._logService.info(`[Ollama] Compacted ${compacted.compactedTurnCount} turns into recap`);
 		}
+
+		// Add recent messages (verbatim)
+		for (const msg of compacted.recentMessages) {
+			messages.push(msg);
+		}
+
+		// Log activity
+		this._agentMemory.logActivity(`User request: ${request.message.substring(0, 100)}`).catch(() => {});
 
 		// Resolve explicitly attached context
 		const contextParts: string[] = [];

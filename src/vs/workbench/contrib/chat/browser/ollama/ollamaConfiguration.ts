@@ -27,6 +27,9 @@ import {
 import { OllamaLanguageModelProvider, OllamaModelInfo } from './ollamaLanguageModel.js';
 import { OllamaChatAgent } from './ollamaChatAgent.js';
 import { OllamaStatusBarEntry } from './ollamaStatusBar.js';
+import { WorkspaceChunkIndex } from './workspaceChunkIndex.js';
+import { AgentMemory } from './agentMemory.js';
+import { ConversationCompactor } from './conversationCompactor.js';
 
 const OLLAMA_EXTENSION_ID = new ExtensionIdentifier('vscode.chat');
 const OLLAMA_VENDOR = 'ollama';
@@ -53,6 +56,59 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			minimum: 2048,
 			maximum: 262144,
 			description: 'The maximum context window size (in tokens) to request from Ollama. Higher values allow the AI to remember more but consume significant GPU VRAM (e.g., 256k can require 16GB+ of VRAM).',
+		},
+		'ollamaAgent.smartContext.enabled': {
+			type: 'boolean',
+			default: true,
+			description: 'Enable smart chunked context: instead of dumping all source files into the prompt, build per-file summaries and select only the most relevant files for each request.',
+		},
+		'ollamaAgent.smartContext.maxRelevantFiles': {
+			type: 'number',
+			default: 15,
+			minimum: 1,
+			maximum: 50,
+			description: 'Maximum number of relevant file summaries to include in the AI context.',
+		},
+		'ollamaAgent.smartContext.workspaceBudgetPercent': {
+			type: 'number',
+			default: 30,
+			minimum: 10,
+			maximum: 60,
+			description: 'Percentage of the context window reserved for workspace context (file summaries, project overview, active editor). The remaining budget is split between conversation history and response.',
+		},
+		'ollamaAgent.smartContext.reindexStrategy': {
+			type: 'string',
+			default: 'fileWatcher',
+			enum: ['fileWatcher', 'interval'],
+			enumDescriptions: [
+				'Re-index files automatically when they change on disk (efficient, recommended).',
+				'Re-scan the entire workspace at a fixed time interval.',
+			],
+			description: 'How to trigger workspace re-indexing for smart context.',
+		},
+		'ollamaAgent.smartContext.reindexIntervalSeconds': {
+			type: 'number',
+			default: 120,
+			minimum: 30,
+			maximum: 3600,
+			description: 'Re-scan interval in seconds (only used when reindexStrategy is "interval").',
+		},
+		'ollamaAgent.conversationCompaction.enabled': {
+			type: 'boolean',
+			default: true,
+			description: 'Enable automatic conversation history compaction. When the conversation grows large, older turns are summarized into a compact recap to save context space.',
+		},
+		'ollamaAgent.conversationCompaction.recentTurns': {
+			type: 'number',
+			default: 6,
+			minimum: 2,
+			maximum: 20,
+			description: 'Number of recent conversation turns to keep verbatim (uncompacted). Older turns are summarized.',
+		},
+		'ollamaAgent.persistentMemory.enabled': {
+			type: 'boolean',
+			default: true,
+			description: 'Enable persistent agent memory. The AI stores task lists, implementation plans, summaries, and activity logs in .darkmatter/ so it remembers across sessions and machines.',
 		},
 	},
 });
@@ -179,8 +235,13 @@ export class OllamaContribution extends Disposable {
 		// Create the language model provider
 		const ollamaProvider = this._register(this.instantiationService.createInstance(OllamaLanguageModelProvider));
 
-		// Create and register the chat agent
-		this._register(this.instantiationService.createInstance(OllamaChatAgent, ollamaProvider));
+		// Create smart context services
+		const chunkIndex = this._register(this.instantiationService.createInstance(WorkspaceChunkIndex, ollamaProvider));
+		const agentMemory = this._register(this.instantiationService.createInstance(AgentMemory));
+		const conversationCompactor = this._register(this.instantiationService.createInstance(ConversationCompactor, ollamaProvider));
+
+		// Create and register the chat agent (with smart context services)
+		this._register(this.instantiationService.createInstance(OllamaChatAgent, ollamaProvider, chunkIndex, agentMemory, conversationCompactor));
 
 		// Create the status bar entry for quick AI settings access
 		this._register(this.instantiationService.createInstance(OllamaStatusBarEntry, ollamaProvider));

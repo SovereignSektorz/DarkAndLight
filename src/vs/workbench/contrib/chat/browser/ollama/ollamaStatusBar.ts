@@ -39,6 +39,8 @@ class ConfigureOllamaAction extends Action2 {
 		const currentModel = configService.getValue<string>('ollamaAgent.model') || 'llama3.1';
 		const currentContext = configService.getValue<number>('ollamaAgent.maxContextWindow') || 131072;
 
+		const smartContextEnabled = configService.getValue<boolean>('ollamaAgent.smartContext.enabled') !== false;
+
 		// Step 1: Pick what to configure
 		const options: IQuickPickItem[] = [
 			{
@@ -58,6 +60,18 @@ class ConfigureOllamaAction extends Action2 {
 				label: '$(history) Context Window',
 				description: `${(currentContext / 1024).toFixed(0)}k tokens`,
 				detail: 'Adjust the maximum AI memory (impacts GPU VRAM)',
+			},
+			{
+				id: 'smartContext',
+				label: smartContextEnabled ? '$(check) Smart Context: ON' : '$(circle-slash) Smart Context: OFF',
+				detail: smartContextEnabled
+					? 'Smart chunked context is active. Click to disable and use legacy full-dump mode.'
+					: 'Smart context is disabled. Click to enable intelligent file selection.',
+			},
+			{
+				id: 'rebuildIndex',
+				label: '$(refresh) Rebuild Workspace Index',
+				detail: 'Force a full re-index of the workspace for smart context',
 			},
 			{
 				id: 'test',
@@ -158,6 +172,18 @@ class ConfigureOllamaAction extends Action2 {
 					logService.info(`[Dark Matter] Max context window updated to: ${newContext}`);
 				}
 			}
+
+		} else if (picked.id === 'smartContext') {
+			// Toggle smart context
+			const newValue = !smartContextEnabled;
+			await configService.updateValue('ollamaAgent.smartContext.enabled', newValue);
+			logService.info(`[Dark Matter] Smart context ${newValue ? 'enabled' : 'disabled'}`);
+
+		} else if (picked.id === 'rebuildIndex') {
+			// Trigger workspace re-index via internal command
+			logService.info('[Dark Matter] Manual workspace re-index requested');
+			await configService.updateValue('ollamaAgent.smartContext.enabled', true);
+			// The WorkspaceChunkIndex will pick up the change and re-index
 
 		} else if (picked.id === 'test') {
 			// Test connection
