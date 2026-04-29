@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { CancellationToken, CancellationTokenSource } from '../../../../../base/common/cancellation.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
@@ -186,6 +186,12 @@ export class WorkspaceChunkIndex extends Disposable {
 			return;
 		}
 
+		const workspace = this.workspaceService.getWorkspace();
+		if (workspace.folders.length === 0) {
+			return; // Nothing to index
+		}
+
+		const cts = new CancellationTokenSource();
 		this._isIndexing = true;
 
 		try {
@@ -193,13 +199,16 @@ export class WorkspaceChunkIndex extends Disposable {
 				location: ProgressLocation.Notification,
 				title: 'Dark Matter: Indexing Workspace',
 				cancellable: true,
-			}, async (progress, token) => {
-				await this.buildIndex(progress, token);
+			}, async (progress) => {
+				await this.buildIndex(progress, cts.token);
+			}, () => {
+				cts.cancel();
 			});
 		} catch (err) {
 			this._logService.error(`[ChunkIndex] Indexing failed: ${err}`);
 		} finally {
 			this._isIndexing = false;
+			cts.dispose();
 		}
 	}
 

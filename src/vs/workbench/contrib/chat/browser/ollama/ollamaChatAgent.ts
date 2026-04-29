@@ -631,6 +631,9 @@ export class OllamaChatAgent extends Disposable {
 			return {};
 
 		} catch (error: unknown) {
+			if (error instanceof Error && error.name === 'AbortError') {
+				return {}; // Standard cancellation, no error message needed
+			}
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			this._logService.error(`[Ollama] Request failed: ${errorMessage}`);
 

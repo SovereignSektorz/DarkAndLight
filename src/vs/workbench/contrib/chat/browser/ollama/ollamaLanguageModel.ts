@@ -167,6 +167,9 @@ export class OllamaLanguageModelProvider extends Disposable {
 				signal: abortController.signal,
 			});
 		} catch (error) {
+			if ((error as Error).name === 'AbortError') {
+				throw error; // Let the caller handle standard cancellation
+			}
 			throw new Error(`Failed to connect to Ollama at ${this.baseUrl}. Is the Ollama server running? Error: ${error}`);
 		}
 
@@ -190,7 +193,10 @@ export class OllamaLanguageModelProvider extends Disposable {
 				}
 
 				const { done, value } = await reader.read();
-				if (done) {
+				if (done || token.isCancellationRequested) {
+					if (token.isCancellationRequested) {
+						await reader.cancel();
+					}
 					break;
 				}
 

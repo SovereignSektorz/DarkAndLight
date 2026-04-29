@@ -30,49 +30,42 @@ class DarkMatterOnboardingTrigger extends Disposable implements IWorkbenchContri
 	) {
 		super();
 
-		// Only show on first launch (not yet dismissed)
-		if (!this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE)) {
-			// Persistent retry logic: attempt to show every 2 seconds until successful or dismissed
-			this.lifecycleService.when(LifecyclePhase.Restored).then(() => {
-				const interval = setInterval(() => {
-					// Stop if already dismissed or showing
-					if (this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE) || (this.onboardingService as any).isShowing) {
-						clearInterval(interval);
-						return;
-					}
-
-					console.log('[Dark Matter] Attempting automatic onboarding trigger...');
-					this.onboardingService.show();
-				}, 2000);
-
-				// Fallback safety: stop after 30 seconds
-				setTimeout(() => clearInterval(interval), 30000);
-			});
-		}
+		// ONBOARDING DISABLED — re-enable when onboarding dialog is ready
+		// To re-enable: uncomment the block below and rebuild
+		//
+		// if (!this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE)) {
+		// 	this.lifecycleService.when(LifecyclePhase.Restored).then(() => {
+		// 		const interval = setInterval(() => {
+		// 			if (this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE) || (this.onboardingService as any).isShowing) {
+		// 				clearInterval(interval); return;
+		// 			}
+		// 			this.onboardingService.show();
+		// 		}, 2000);
+		// 		setTimeout(() => clearInterval(interval), 30000);
+		// 	});
+		// }
 	}
 }
 
-/*
-registerWorkbenchContribution2(
-	DarkMatterOnboardingTrigger.ID,
-	DarkMatterOnboardingTrigger,
-	WorkbenchPhase.AfterRestored
-);
-*/
+// ONBOARDING DISABLED — uncomment to re-enable
+// registerWorkbenchContribution2(
+// 	DarkMatterOnboardingTrigger.ID,
+// 	DarkMatterOnboardingTrigger,
+// 	WorkbenchPhase.AfterRestored
+// );
 
-// ── Command palette action ────────────────────────────────────────────
-registerAction2(class extends Action2 {
-	constructor() {
-		super({
-			id: 'workbench.action.darkMatterOnboarding',
-			title: localize2('darkMatterOnboarding', "Dark Matter: Setup Ollama"),
-			category: Categories.Developer,
-			f1: true,
-		});
-	}
-
-	run(accessor: ServicesAccessor): void {
-		const onboardingService = accessor.get(IOnboardingService);
-		onboardingService.show();
-	}
-});
+// ONBOARDING DISABLED — re-enable command palette entry when ready
+// registerAction2(class extends Action2 {
+// 	constructor() {
+// 		super({
+// 			id: 'workbench.action.darkMatterOnboarding',
+// 			title: localize2('darkMatterOnboarding', "Dark Matter: Setup Ollama"),
+// 			category: Categories.Developer,
+// 			f1: true,
+// 		});
+// 	}
+// 	run(accessor: ServicesAccessor): void {
+// 		const onboardingService = accessor.get(IOnboardingService);
+// 		onboardingService.show();
+// 	}
+// });

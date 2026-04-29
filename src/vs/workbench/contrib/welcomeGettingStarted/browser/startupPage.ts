@@ -147,6 +147,7 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 				}
 			}
 		}
+		// this.tryShowOnboarding();
 	}
 
 	private tryOpenWalkthroughForFolder(): boolean {

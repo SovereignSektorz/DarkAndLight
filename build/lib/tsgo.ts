@@ -26,7 +26,7 @@ export function spawnTsgo(projectPath: string, config: { taskName: string; noEmi
 		}
 	}
 
-	const args = ['tsgo', '--project', projectPath, '--pretty', 'false'];
+	const args = ['tsgo', '--project', `"${projectPath}"`, '--pretty', 'false'];
 	if (config.noEmit) {
 		args.push('--noEmit');
 	} else {
