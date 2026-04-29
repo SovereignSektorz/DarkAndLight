@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -13,6 +13,7 @@ import { IConfigurationService } from '../../../../../platform/configuration/com
 import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
 import { IProgressService, ProgressLocation } from '../../../../../platform/progress/common/progress.js';
 import { OllamaChatMessage, OllamaLanguageModelProvider } from './ollamaLanguageModel.js';
+import { mainWindow } from '../../../../../base/browser/window.js';
 
 /** Directories to skip during workspace scanning */
 const IGNORED_DIRS = new Set([
@@ -114,7 +115,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		// Clean up previous strategy
 		this._fileWatcherDisposables.clear();
 		if (this._intervalHandle) {
-			clearInterval(this._intervalHandle);
+			mainWindow.clearInterval(this._intervalHandle);
 			this._intervalHandle = undefined;
 		}
 
@@ -157,16 +158,16 @@ export class WorkspaceChunkIndex extends Disposable {
 
 	private scheduleReindex(): void {
 		if (this._reindexTimeout) {
-			clearTimeout(this._reindexTimeout);
+			mainWindow.clearTimeout(this._reindexTimeout);
 		}
-		this._reindexTimeout = setTimeout(() => {
+		this._reindexTimeout = mainWindow.setTimeout(() => {
 			this.runFullIndex();
 		}, 2000);
 	}
 
 	private setupIntervalReindex(): void {
 		const intervalSec = this.configurationService.getValue<number>('ollamaAgent.smartContext.reindexIntervalSeconds') || 120;
-		this._intervalHandle = setInterval(() => {
+		this._intervalHandle = mainWindow.setInterval(() => {
 			this.runFullIndex();
 		}, intervalSec * 1000);
 		this._logService.info(`[ChunkIndex] Using interval reindex strategy (${intervalSec}s)`);
@@ -625,10 +626,10 @@ export class WorkspaceChunkIndex extends Disposable {
 	override dispose(): void {
 		super.dispose();
 		if (this._intervalHandle) {
-			clearInterval(this._intervalHandle);
+			mainWindow.clearInterval(this._intervalHandle);
 		}
 		if (this._reindexTimeout) {
-			clearTimeout(this._reindexTimeout);
+			mainWindow.clearTimeout(this._reindexTimeout);
 		}
 	}
 }

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -19,7 +19,7 @@ import { ILifecycleService, LifecyclePhase } from '../../../services/lifecycle/c
 
 registerSingleton(IOnboardingService, DarkMatterOnboarding, InstantiationType.Delayed);
 
-// ── Auto-show onboarding on first launch ──────────────────────────────
+// -- Auto-show onboarding on first launch ------------------------------
 class DarkMatterOnboardingTrigger extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'workbench.contrib.darkMatterOnboardingTrigger';
 

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, DisposableStore } from '../../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { IOnboardingService } from '../common/onboardingService.js';
 import { ILayoutService } from '../../../../platform/layout/browser/layoutService.js';
@@ -11,7 +11,6 @@ import { IConfigurationService } from '../../../../platform/configuration/common
 import { $, append, addDisposableListener, EventType, getActiveWindow, clearNode } from '../../../../base/browser/dom.js';
 import { StandardKeyboardEvent } from '../../../../base/browser/keyboardEvent.js';
 import { KeyCode } from '../../../../base/common/keyCodes.js';
-import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { FileAccess } from '../../../../base/common/network.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -328,7 +327,7 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 					const data = await r.json();
 					this.models = data.models || [];
 					this.serverUrl = url;
-					status.textContent = `✓ Connected! Found ${this.models.length} model(s)`;
+					status.textContent = `\u2713 Connected! Found ${this.models.length} model(s)`;
 					status.className = 'dm-onboard-status success';
 
 					await this.configurationService.updateValue('ollamaAgent.baseUrl', url);

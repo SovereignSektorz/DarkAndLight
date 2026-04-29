@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -25,6 +25,7 @@ import { IConfigurationService } from '../../../../../platform/configuration/com
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
+import { hasKey } from '../../../../../base/common/types.js';
 
 const OLLAMA_AGENT_ID = 'ollama.local';
 const OLLAMA_AGENT_NAME = 'ollama';
@@ -204,7 +205,7 @@ export class OllamaChatAgent extends Disposable {
 		let totalSourceSize = 0;
 
 		for (const folder of workspace.folders) {
-			treeLines.push(`📁 ${folder.name}/  (${folder.uri.fsPath})`);
+			treeLines.push(`[Dir] ${folder.name}/  (${folder.uri.fsPath})`);
 			try {
 				const stat = await this.fileService.resolve(folder.uri, { resolveMetadata: false });
 				if (stat.children) {
@@ -270,11 +271,11 @@ export class OllamaChatAgent extends Disposable {
 		for (const child of sorted) {
 			if (child.isDirectory) {
 				if (IGNORED_DIRS.has(child.name)) {
-					treeLines.push(`${indent}📁 ${child.name}/  (skipped)`);
+					treeLines.push(`${indent}[Dir] ${child.name}/  (skipped)`);
 					continue;
 				}
 
-				treeLines.push(`${indent}📁 ${child.name}/`);
+				treeLines.push(`${indent}[Dir] ${child.name}/`);
 
 				try {
 					const subStat = await this.fileService.resolve(child.resource, { resolveMetadata: false });
@@ -297,7 +298,7 @@ export class OllamaChatAgent extends Disposable {
 					continue;
 				}
 
-				treeLines.push(`${indent}📄 ${child.name}`);
+				treeLines.push(`${indent}[File] ${child.name}`);
 
 				// Read source files if under limits
 				const isSource = SOURCE_EXTENSIONS.has(ext)
@@ -418,7 +419,7 @@ export class OllamaChatAgent extends Disposable {
 		}
 
 		let model: ITextModel | null = null;
-		if ('getModel' in control) {
+		if (hasKey(control, 'getModel')) {
 			model = (control as IEditor).getModel?.() as ITextModel | null;
 		}
 
@@ -432,7 +433,7 @@ export class OllamaChatAgent extends Disposable {
 			return undefined;
 		}
 
-		const selection = 'getSelection' in control ? (control as IEditor).getSelection?.() : undefined;
+		const selection = hasKey(control, 'getSelection') ? (control as IEditor).getSelection?.() : undefined;
 		let selectedText: string | undefined;
 		if (selection && !selection.isEmpty()) {
 			selectedText = model.getValueInRange(selection);
@@ -717,7 +718,7 @@ export class OllamaChatAgent extends Disposable {
 			const stat = await this.fileService.resolve(variable.value);
 			if (stat.children) {
 				const listing = stat.children
-					.map(c => `  ${c.isDirectory ? '📁' : '📄'} ${c.name}`)
+					.map(c => `  ${c.isDirectory ? '[Dir]' : '[File]'} ${c.name}`)
 					.join('\n');
 				return `--- Directory: ${variable.value.fsPath} ---\n${listing}`;
 			}
@@ -734,7 +735,7 @@ export class OllamaChatAgent extends Disposable {
 		if (isLocation(value)) {
 			return `--- ${basename(value.uri)} (L${value.range.startLineNumber}-${value.range.endLineNumber}) ---`;
 		}
-		if (value && typeof value === 'object' && 'value' in value && typeof value.value === 'string') {
+		if (value && typeof value === 'object' && hasKey(value, 'value') && typeof value.value === 'string') {
 			return `--- ${variable.isSelection ? 'Selection' : variable.name} ---\n${value.value}`;
 		}
 		return undefined;

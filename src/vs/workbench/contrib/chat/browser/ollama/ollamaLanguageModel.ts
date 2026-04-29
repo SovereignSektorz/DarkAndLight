@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -8,6 +8,7 @@ import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ILogService, ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
+import { localize } from '../../../../../nls.js';
 
 export interface OllamaChatMessage {
 	role: 'system' | 'user' | 'assistant';
@@ -153,7 +154,7 @@ export class OllamaLanguageModelProvider extends Disposable {
 			}
 		};
 
-		this._logService.info(`[Ollama] Sending chat request to ${url} with model ${activeModel} (num_ctx: ${finalCtx}${nativeLimit ? " (capped)" : ""})`);
+		this._logService.info(localize('ollama.sendingRequest', "[Ollama] Sending chat request to {0} with model {1} (num_ctx: {2})", url, activeModel, finalCtx));
 
 		const abortController = new AbortController();
 		token.onCancellationRequested(() => abortController.abort());
