@@ -58,10 +58,11 @@ To build Dark Matter IDE on Windows, you will need to install the following:
 
 1.  **Node.js** (v22.x LTS recommended)
 2.  **Python 3.10+** (Required for native module compilation)
-3.  **C++ Build Tools** — Install [Visual Studio 2022 Community](https://visualstudio.microsoft.com/downloads/) and select the **"Desktop development with C++"** workload.
-4.  **Inno Setup 6** — Required to package the Windows installer. [Download here](https://jrsoftware.org/isdl.php).
+3.  **C++ Build Tools** — [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload. (Note: The full Visual Studio Community IDE is not required).
+4.  **Inno Setup 6 (Optional)** — Required only to package the Windows installer (`.exe`).
 5.  **Git** — [Download here](https://git-scm.com/downloads).
 6.  **Ollama** — [Available for download here](https://ollama.com/download).
+
 
 ### Building from Source (Windows)
 
@@ -75,9 +76,12 @@ cd dark-matter-ide
 # 2. Run the build script
 # This will install dependencies, compile the source, and build the installer
 .\build_exe.ps1
+
+# If you don't have Inno Setup, you can build just the application:
+.\build_exe.ps1 -SkipInstaller
 ```
 
-The compiled installer will be located in the `built/` directory.
+The compiled output will be in the `built/` directory (or `VSCode-win32-x64/` if skipping the installer).
 
 > [!NOTE]
 > **Linux Support**
