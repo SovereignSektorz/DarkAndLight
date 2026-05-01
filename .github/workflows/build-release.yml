@@ -21,15 +21,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install Yarn
-        run: npm install -g yarn
 
       - name: Stamp version and commit into product.json
         shell: pwsh
@@ -43,16 +40,16 @@ jobs:
           Write-Output "Stamped version=$version commit=${{ github.sha }}"
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: npm ci
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       - name: Download Electron
-        run: yarn electron
+        run: npm run electron
 
       - name: Build (production minified)
-        run: yarn gulp vscode-win32-x64-min
+        run: npm run gulp -- vscode-win32-x64-min
         env:
           NODE_OPTIONS: --max-old-space-size=8192
 
@@ -78,20 +75,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg
-
-      - name: Install Yarn
-        run: npm install -g yarn
 
       - name: Stamp version and commit into product.json
         run: |
@@ -104,17 +93,22 @@ jobs:
             '. + {version: $v, commit: $c, date: $d}' product.json > "$tmp" && mv "$tmp" product.json
           echo "Stamped version=$VERSION commit=$COMMIT"
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg
+
       - name: Install dependencies
-        run: yarn install --frozen-lockfile
+        run: npm ci
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
       - name: Download Electron
-        run: yarn electron
+        run: npm run electron
 
       - name: Build (production minified)
-        run: yarn gulp vscode-linux-x64-min
+        run: npm run gulp -- vscode-linux-x64-min
         env:
           NODE_OPTIONS: --max-old-space-size=8192
 
@@ -124,7 +118,7 @@ jobs:
           tar -czf DarkMatter-linux-x64.tar.gz VSCode-linux-x64
 
       - name: Build .deb package
-        run: yarn gulp vscode-linux-x64-build-deb
+        run: npm run gulp -- vscode-linux-x64-build-deb
         continue-on-error: true
 
       - name: Upload tar.gz artifact
