@@ -54,14 +54,22 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 
 ### Prerequisites
 
-To build Dark Matter IDE on Windows, you will need to install the following:
+To build Dark Matter IDE, you will need to install the following based on your OS:
 
+#### Windows
 1.  **Node.js** (v22.x LTS recommended)
-2.  **Python 3.10+** (Required for native module compilation)
-3.  **C++ Build Tools** — [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload. (Note: The full Visual Studio Community IDE is not required).
-4.  **Inno Setup 6 (Optional)** — Required only to package the Windows installer (`.exe`).
-5.  **Git** — [Download here](https://git-scm.com/downloads).
-6.  **Ollama** — [Available for download here](https://ollama.com/download).
+2.  **Python 3.10+**
+3.  **C++ Build Tools** — [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload.
+4.  **Inno Setup 6 (Optional)** — Required only for `.exe` installer.
+5.  **Git**
+6.  **Ollama**
+
+#### Linux (Debian/Ubuntu)
+1.  **Node.js** (v22.x LTS recommended)
+2.  **Python 3.10+**
+3.  **Build Tools**: `sudo apt-get install build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev`
+4.  **Git**
+5.  **Ollama**
 
 
 ### Building from Source (Windows)
@@ -83,10 +91,31 @@ cd dark-matter-ide
 
 The compiled output will be in the `built/` directory (or `VSCode-win32-x64/` if skipping the installer).
 
-> [!NOTE]
-> **Linux Support**
->
-> Compiling for Linux is currently a work in progress. While the core IDE can be run from source on Linux, the automated build scripts and installers are still being developed.
+### Building from Source (Linux)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/abmina/dark-matter-ide.git
+cd dark-matter-ide
+
+# 2. Install dependencies
+npm ci
+
+# 3. Download Electron
+npm run electron
+
+# 4. Start the watch process (compilation)
+npm run watch
+
+# 5. Launch the IDE (in a separate terminal)
+./scripts/code.sh
+```
+
+To package for Linux (creates `.tar.gz` and `.deb`):
+```bash
+npm run gulp -- vscode-linux-x64-min
+npm run gulp -- vscode-linux-x64-build-deb
+```
 
 
 ### Using the AI Agent

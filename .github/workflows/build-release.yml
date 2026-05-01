@@ -32,12 +32,13 @@ jobs:
         shell: pwsh
         run: |
           $product = Get-Content product.json -Raw | ConvertFrom-Json
-          $version = '${{ github.ref_name }}'.TrimStart('v')
-          $product | Add-Member -Force -Name 'version' -Value $version -MemberType NoteProperty
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+          # Keep version as 1.116.0 for extension compatibility
+          $product | Add-Member -Force -Name 'darkmatterVersion' -Value $tagVersion -MemberType NoteProperty
           $product | Add-Member -Force -Name 'commit' -Value '${{ github.sha }}' -MemberType NoteProperty
           $product | Add-Member -Force -Name 'date' -Value (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ') -MemberType NoteProperty
           $product | ConvertTo-Json -Depth 10 | Set-Content product.json -Encoding utf8
-          Write-Output "Stamped version=$version commit=${{ github.sha }}"
+          Write-Output "Stamped darkmatterVersion=$tagVersion commit=${{ github.sha }}"
 
       - name: Install dependencies
         run: npm ci
@@ -89,9 +90,10 @@ jobs:
           COMMIT="${{ github.sha }}"
           DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
           tmp=$(mktemp)
+          # Update darkmatterVersion, keep version as-is for compatibility
           jq --arg v "$VERSION" --arg c "$COMMIT" --arg d "$DATE" \
-            '. + {version: $v, commit: $c, date: $d}' product.json > "$tmp" && mv "$tmp" product.json
-          echo "Stamped version=$VERSION commit=$COMMIT"
+            '. + {darkmatterVersion: $v, commit: $c, date: $d}' product.json > "$tmp" && mv "$tmp" product.json
+          echo "Stamped darkmatterVersion=$VERSION commit=$COMMIT"
 
       - name: Install system dependencies
         run: |
@@ -187,4 +189,4 @@ jobs:
             - **Commit**: ${{ github.sha }}
           files: ./release/*
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
