@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - master
+      - linux-compile-test
   pull_request:
     branches:
       - master
+      - linux-compile-test
   workflow_dispatch:
 
 jobs:
@@ -54,3 +56,50 @@ jobs:
           name: DarkMatter-win32-x64
           path: ./DarkMatter-win32-x64.zip
 
+  build-linux:
+    name: Linux x64 Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev
+
+      - name: Install Dependencies
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Download Electron
+        run: npm run electron
+
+      - name: Build Application
+        run: npm run gulp -- vscode-linux-x64
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+
+      - name: Create tar.gz archive
+        run: |
+          tar -czf ./DarkMatter-linux-x64.tar.gz ../VSCode-linux-x64
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DarkMatter-linux-x64
+          path: ./DarkMatter-linux-x64.tar.gz

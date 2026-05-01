@@ -84,6 +84,7 @@ export class OllamaChatAgent extends Disposable {
 	private readonly SCAN_INTERVAL_MS = 120_000; // rescan every 2 minutes
 	private readonly _alwaysAllowedActions = new Set<string>();
 	/** Reusable terminal instance for agent commands */
+	// @ts-ignore: reserved for future agent terminal reuse
 	private _agentTerminal: ITerminalInstance | undefined;
 
 	/** Max iterations for the agentic follow-up loop */

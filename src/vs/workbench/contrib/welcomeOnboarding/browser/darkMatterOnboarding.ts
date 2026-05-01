@@ -21,7 +21,8 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 	private readonly _onDidDismiss = this._register(new Emitter<void>());
 	readonly onDidDismiss: Event<void> = this._onDidDismiss.event;
 
-	private readonly _onDidComplete = this._register(new Emitter<void>());
+	private readonly _onDidComplete = this._register(new Emitter<void>()); // reserved for future use
+	readonly onDidComplete: Event<void> = this._onDidComplete.event;
 
 	private overlay: HTMLElement | undefined;
 	private card: HTMLElement | undefined;
@@ -37,9 +38,9 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 	get isShowing(): boolean { return this._isShowing; }
 
 	constructor(
-		@ILayoutService private readonly layoutService: ILayoutService,
+		@ILayoutService _layoutService: ILayoutService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@INotificationService private readonly notificationService: INotificationService,
+		@INotificationService _notificationService: INotificationService,
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();

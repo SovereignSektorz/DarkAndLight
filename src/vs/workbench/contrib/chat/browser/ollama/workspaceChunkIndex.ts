@@ -72,7 +72,7 @@ export class WorkspaceChunkIndex extends Disposable {
 	private readonly _indexEntries = new Map<string, FileIndexEntry>();
 	private _workspaceOverview: string = '';
 	private _isIndexing = false;
-	private _intervalHandle: ReturnType<typeof setInterval> | undefined;
+	private _intervalHandle: number | undefined;
 	private readonly _fileWatcherDisposables = this._register(new DisposableStore());
 
 	constructor(
@@ -154,7 +154,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		this._logService.info('[ChunkIndex] Using file watcher reindex strategy');
 	}
 
-	private _reindexTimeout: ReturnType<typeof setTimeout> | undefined;
+	private _reindexTimeout: number | undefined;
 
 	private scheduleReindex(): void {
 		if (this._reindexTimeout) {

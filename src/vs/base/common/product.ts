@@ -66,6 +66,7 @@ export type ExtensionVirtualWorkspaceSupport = {
 
 export interface IProductConfiguration {
 	readonly version: string;
+	readonly darkmatterVersion?: string;
 	readonly date?: string;
 	readonly quality?: string;
 	readonly commit?: string;

@@ -31,8 +31,9 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
 import { AuxiliaryBarMaximizedContext } from '../../../common/contextkeys.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { getActiveElement } from '../../../../base/browser/dom.js';
-import { IOnboardingService } from '../../welcomeOnboarding/common/onboardingService.js';
-import { ONBOARDING_STORAGE_KEY } from '../../welcomeOnboarding/common/onboardingTypes.js';
+// ONBOARDING DISABLED — uncomment when onboarding dialog is ready
+// import { IOnboardingService } from '../../welcomeOnboarding/common/onboardingService.js';
+// import { ONBOARDING_STORAGE_KEY } from '../../welcomeOnboarding/common/onboardingTypes.js';
 
 export const restoreWalkthroughsConfigurationKey = 'workbench.welcomePage.restorableWalkthroughs';
 export type RestoreWalkthroughsConfigurationValue = { folder: string; category?: string; step?: string };
@@ -93,7 +94,8 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 		@IStorageService private readonly storageService: IStorageService,
 		@INotificationService private readonly notificationService: INotificationService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService,
-		@IOnboardingService private readonly onboardingService: IOnboardingService,
+		// ONBOARDING DISABLED — uncomment when onboarding dialog is ready
+		// @IOnboardingService private readonly onboardingService: IOnboardingService,
 	) {
 		super();
 
@@ -230,19 +232,20 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 		return true; // do not steal focus
 	}
 
-	private tryShowOnboarding(): void {
-		if (this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE)) {
-			return; // onboarding already completed
-		}
-
-		// Show the Dark Matter Ollama setup overlay
-		this.onboardingService.show();
-
-		// Mark onboarding as completed when dismissed
-		this._register(this.onboardingService.onDidDismiss(() => {
-			this.storageService.store(ONBOARDING_STORAGE_KEY, true, StorageScope.PROFILE, StorageTarget.USER);
-		}));
-	}
+	// ONBOARDING DISABLED — uncomment when onboarding dialog is ready
+	// private tryShowOnboarding(): void {
+	// 	if (this.storageService.get(ONBOARDING_STORAGE_KEY, StorageScope.PROFILE)) {
+	// 		return; // onboarding already completed
+	// 	}
+	//
+	// 	// Show the Dark Matter Ollama setup overlay
+	// 	this.onboardingService.show();
+	//
+	// 	// Mark onboarding as completed when dismissed
+	// 	this._register(this.onboardingService.onDidDismiss(() => {
+	// 		this.storageService.store(ONBOARDING_STORAGE_KEY, true, StorageScope.PROFILE, StorageTarget.USER);
+	// 	}));
+	// }
 }
 
 function isStartupPageEnabled(configurationService: IConfigurationService, contextService: IWorkspaceContextService, environmentService: IWorkbenchEnvironmentService) {

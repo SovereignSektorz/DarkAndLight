@@ -85,15 +85,10 @@ export class DialogHandlerContribution extends Disposable implements IWorkbenchC
 						await this.nativeImpl.value.prompt(args.prompt);
 				}
 
-				// About
+				// About — always use custom dialog so it follows the IDE theme
 				else {
 					const aboutDialogDetails = createNativeAboutDialogDetails(this.productService, await this.nativeHostService.getOSProperties());
-
-					if (this.useCustomDialog) {
-						await this.browserImpl.value.about(aboutDialogDetails.title, aboutDialogDetails.details, aboutDialogDetails.detailsToCopy);
-					} else {
-						await this.nativeImpl.value.about(aboutDialogDetails.title, aboutDialogDetails.details, aboutDialogDetails.detailsToCopy);
-					}
+					await this.browserImpl.value.about(aboutDialogDetails.title, aboutDialogDetails.details, aboutDialogDetails.detailsToCopy);
 				}
 			} catch (error) {
 				result = error;

@@ -19,17 +19,23 @@ export function createNativeAboutDialogDetails(productService: IProductService, 
 	}
 
 	const getDetails = (useAgo: boolean): string => {
+		const dateStr = productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown';
+		const osStr = `${osProps.type} ${osProps.arch} ${osProps.release}${isLinuxSnap ? ' snap' : ''}`;
+
+		if (productService.darkmatterVersion) {
+			return `Dark Matter Version: ${productService.darkmatterVersion}\nVSCode OSS Version: ${version}\nCommit: ${productService.commit || 'Unknown'}\nDate: ${dateStr}\nElectron: ${process.versions['electron']}\nChromium: ${process.versions['chrome']}\nNode.js: ${process.versions['node']}\nV8: ${process.versions['v8']}\nOS: ${osStr}`;
+		}
+
 		return localize({ key: 'aboutDetail', comment: ['Electron, Chromium, Node.js and V8 are product names that need no translation'] },
-			"Version: {0}\nCommit: {1}\nDate: {2}\nElectron: {3}\nElectronBuildId: {4}\nChromium: {5}\nNode.js: {6}\nV8: {7}\nOS: {8}",
+			"Version: {0}\nCommit: {1}\nDate: {2}\nElectron: {3}\nChromium: {4}\nNode.js: {5}\nV8: {6}\nOS: {7}",
 			version,
 			productService.commit || 'Unknown',
-			productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown',
+			dateStr,
 			process.versions['electron'],
-			process.versions['microsoft-build'],
 			process.versions['chrome'],
 			process.versions['node'],
 			process.versions['v8'],
-			`${osProps.type} ${osProps.arch} ${osProps.release}${isLinuxSnap ? ' snap' : ''}`
+			osStr
 		);
 	};
 

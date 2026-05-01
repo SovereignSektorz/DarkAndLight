@@ -47,11 +47,17 @@ export function createWorkbenchDialogOptions(options: Partial<IDialogOptions>, k
 
 export function createBrowserAboutDialogDetails(productService: IProductService): { title: string; details: string; detailsToCopy: string } {
 	const detailString = (useAgo: boolean): string => {
+		const dateStr = productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown';
+
+		if (productService.darkmatterVersion) {
+			return `Dark Matter Version: ${productService.darkmatterVersion}\nVSCode OSS Version: ${productService.version || 'Unknown'}\nCommit: ${productService.commit || 'Unknown'}\nDate: ${dateStr}\nBrowser: ${navigator.userAgent}`;
+		}
+
 		return localize('aboutDetail',
 			"Version: {0}\nCommit: {1}\nDate: {2}\nBrowser: {3}",
 			productService.version || 'Unknown',
 			productService.commit || 'Unknown',
-			productService.date ? `${productService.date}${useAgo ? ' (' + fromNow(new Date(productService.date), true) + ')' : ''}` : 'Unknown',
+			dateStr,
 			navigator.userAgent
 		);
 	};
