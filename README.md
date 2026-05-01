@@ -53,28 +53,37 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 ## Getting Started
 
 ### Prerequisites
-1.  **Node.js** (v18 or later)
-2.  **Ollama** — [Available for download here](https://ollama.com/download)
 
-### Installation and Setup
-```bash
-# Install Ollama and pull a recommended model
-ollama pull gemma2:9b
-```
+To build Dark Matter IDE on Windows, you will need to install the following:
 
-### Building from Source
-```bash
-# Clone the repository
+1.  **Node.js** (v22.x LTS recommended)
+2.  **Python 3.10+** (Required for native module compilation)
+3.  **C++ Build Tools** — Install [Visual Studio 2022 Community](https://visualstudio.microsoft.com/downloads/) and select the **"Desktop development with C++"** workload.
+4.  **Inno Setup 6** — Required to package the Windows installer. [Download here](https://jrsoftware.org/isdl.php).
+5.  **Git** — [Download here](https://git-scm.com/downloads).
+6.  **Ollama** — [Available for download here](https://ollama.com/download).
+
+### Building from Source (Windows)
+
+Dark Matter includes a PowerShell script to automate the build and packaging process.
+
+```powershell
+# 1. Clone the repository
 git clone https://github.com/abmina/dark-matter-ide.git
 cd dark-matter-ide
 
-# Install dependencies
-npm install
-
-# Build and launch on Windows
-yarn run gulp vscode-win32-x64-min
-.\scripts\code.bat
+# 2. Run the build script
+# This will install dependencies, compile the source, and build the installer
+.\build_exe.ps1
 ```
+
+The compiled installer will be located in the `built/` directory.
+
+> [!NOTE]
+> **Linux Support**
+>
+> Compiling for Linux is currently a work in progress. While the core IDE can be run from source on Linux, the automated build scripts and installers are still being developed.
+
 
 ### Using the AI Agent
 1.  Ensure the Ollama server is active (`ollama serve`).

@@ -7,7 +7,7 @@ import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
-import { ILogService, ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
+import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
 import { localize } from '../../../../../nls.js';
 
 export interface OllamaChatMessage {
@@ -21,6 +21,7 @@ export interface OllamaChatRequest {
 	stream: boolean;
 	options?: {
 		num_ctx?: number;
+		repeat_penalty?: number;
 	};
 }
 
@@ -126,6 +127,24 @@ export class OllamaLanguageModelProvider extends Disposable {
 		return undefined;
 	}
 
+	async unloadModel(modelName: string): Promise<void> {
+		try {
+			const response = await fetch(`${this.baseUrl}/api/chat`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				// Setting keep_alive to 0 forces Ollama to unload the model from GPU memory
+				body: JSON.stringify({ model: modelName, keep_alive: 0 })
+			});
+			if (response.ok) {
+				this._logService.info(`[Ollama] Successfully purged model ${modelName} from GPU memory`);
+			} else {
+				this._logService.error(`[Ollama] Failed to purge model ${modelName}: ${response.statusText}`);
+			}
+		} catch (error) {
+			this._logService.error(`[Ollama] Failed to connect to Ollama to purge model ${modelName}: ${error}`);
+		}
+	}
+
 	async *sendChatRequest(
 		messages: OllamaChatMessage[],
 		token: CancellationToken,
@@ -150,7 +169,8 @@ export class OllamaLanguageModelProvider extends Disposable {
 			messages,
 			stream: true,
 			options: {
-				num_ctx: finalCtx
+				num_ctx: finalCtx,
+				repeat_penalty: 1.2
 			}
 		};
 

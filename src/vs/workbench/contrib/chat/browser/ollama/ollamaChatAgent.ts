@@ -6,12 +6,14 @@
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
-import { basename } from '../../../../../base/common/resources.js';
+import { basename, dirname } from '../../../../../base/common/resources.js';
+import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
-import { ILogService, ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
+import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IFileService, IFileStat } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { ChatAgentLocation, ChatModeKind } from '../../common/constants.js';
 import { IChatAgentData, IChatAgentHistoryEntry, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../common/participants/chatAgents.js';
 import { IChatFollowup, IChatProgress } from '../../common/chatService/chatService.js';
@@ -22,6 +24,8 @@ import { ITextModel } from '../../../../../editor/common/model.js';
 import { IEditor } from '../../../../../editor/common/editorCommon.js';
 import { isLocation } from '../../../../../editor/common/languages.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
+import { ITerminalInstance, ITerminalService } from '../../../../contrib/terminal/browser/terminal.js';
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
@@ -78,6 +82,35 @@ export class OllamaChatAgent extends Disposable {
 	private _cachedSourceFiles: string | undefined;
 	private _lastScanTime = 0;
 	private readonly SCAN_INTERVAL_MS = 120_000; // rescan every 2 minutes
+	private readonly _alwaysAllowedActions = new Set<string>();
+	/** Reusable terminal instance for agent commands */
+	private _agentTerminal: ITerminalInstance | undefined;
+
+	/** Max iterations for the agentic follow-up loop */
+	private static readonly MAX_AGENT_LOOP_DEPTH = 3;
+	/** Max terminal output to capture (characters) */
+	private static readonly MAX_TERMINAL_OUTPUT = 4000;
+	/** Silence timeout before considering command complete (ms) */
+	private static readonly TERMINAL_SILENCE_TIMEOUT = 5000;
+	/** Absolute timeout for terminal output capture (ms) */
+	private static readonly TERMINAL_ABSOLUTE_TIMEOUT = 30000;
+
+	/** Strip <file_action> and <thought> tags from text before displaying to user */
+	private static stripFileActionTags(text: string): string {
+		// Remove self-closing: <file_action ... />
+		let cleaned = text.replace(/<file_action\s+[^>]*?\/>/gi, '');
+		// Remove paired: <file_action ...>...</file_action>
+		cleaned = cleaned.replace(/<file_action\s+[^>]*?>[\s\S]*?<\/file_action>/gi, '');
+		// Remove any stray closing tags that lost their opener
+		cleaned = cleaned.replace(/<\/file_action>/gi, '');
+		// Remove thought blocks: <thought>...</thought>
+		cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+		// Remove stray thought tags
+		cleaned = cleaned.replace(/<\/?thought>/gi, '');
+		// Clean up excessive blank lines left behind
+		cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+		return cleaned;
+	}
 
 	constructor(
 		private readonly ollamaProvider: OllamaLanguageModelProvider,
@@ -90,10 +123,18 @@ export class OllamaChatAgent extends Disposable {
 		@IEditorService private readonly editorService: IEditorService,
 		@ILoggerService private readonly loggerService: ILoggerService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IDialogService private readonly dialogService: IDialogService,
+		@ITerminalService private readonly terminalService: ITerminalService,
+		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 	) {
 		super();
 
 		this._logService = this._register(this.loggerService.createLogger('ollama', { name: 'Dark Matter' }));
+
+		// Purge GPU memory when workspace/window closes
+		this._register(this.lifecycleService.onWillShutdown(e => {
+			e.join(this.ollamaProvider.unloadModel(this.ollamaProvider.model), { id: 'darkmatter.unloadOllama', label: 'Purging AI Model from VRAM' });
+		}));
 
 		// Load persistent memory
 		this._agentMemory.load().catch(err => {
@@ -419,7 +460,7 @@ export class OllamaChatAgent extends Disposable {
 		}
 
 		let model: ITextModel | null = null;
-		if (hasKey(control, 'getModel')) {
+		if (control && typeof control === 'object' && hasKey(control, { getModel: true })) {
 			model = (control as IEditor).getModel?.() as ITextModel | null;
 		}
 
@@ -433,7 +474,7 @@ export class OllamaChatAgent extends Disposable {
 			return undefined;
 		}
 
-		const selection = hasKey(control, 'getSelection') ? (control as IEditor).getSelection?.() : undefined;
+		const selection = control && typeof control === 'object' && hasKey(control, { getSelection: true }) ? (control as IEditor).getSelection?.() : undefined;
 		let selectedText: string | undefined;
 		if (selection && !selection.isEmpty()) {
 			selectedText = model.getValueInRange(selection);
@@ -477,7 +518,6 @@ export class OllamaChatAgent extends Disposable {
 
 		// Conversation history — use compactor if enabled
 		const maxContextWindow = this.configurationService.getValue<number>('ollamaAgent.maxContextWindow') || 131072;
-		const workspaceBudgetPct = this.configurationService.getValue<number>('ollamaAgent.smartContext.workspaceBudgetPercent') || 30;
 		const systemPromptTokens = Math.ceil(systemPrompt.length / 4);
 		const remainingAfterSystem = maxContextWindow - systemPromptTokens;
 		const responseBudget = Math.floor(maxContextWindow * 0.25); // 25% reserved for response generation
@@ -506,7 +546,7 @@ export class OllamaChatAgent extends Disposable {
 		}
 
 		// Log activity
-		this._agentMemory.logActivity(`User request: ${request.message.substring(0, 100)}`).catch(() => {});
+		this._agentMemory.logActivity(`User request: ${request.message.substring(0, 100)}`).catch(() => { });
 
 		// Resolve explicitly attached context
 		const contextParts: string[] = [];
@@ -548,6 +588,10 @@ export class OllamaChatAgent extends Disposable {
 			let totalLength = 0;
 			let inThought = false;
 			let currentBuffer = '';
+			let fullResponse = '';
+
+			// Helper reference for file action stripping
+			const stripFileActionTags = OllamaChatAgent.stripFileActionTags;
 
 			for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
 				if (token.isCancellationRequested) {
@@ -555,6 +599,7 @@ export class OllamaChatAgent extends Disposable {
 				}
 				totalLength += chunk.length;
 				currentBuffer += chunk;
+				fullResponse += chunk;
 
 				// Diagnostic log for raw chunks
 				this._logService.trace(`[Ollama Agent] Received chunk: ${JSON.stringify(chunk)}`);
@@ -565,27 +610,70 @@ export class OllamaChatAgent extends Disposable {
 					const lowerBuffer = currentBuffer.toLowerCase();
 
 					if (!inThought) {
+						// Check for <thought> tag first
 						const startIdx = lowerBuffer.indexOf('<thought>');
-						if (startIdx !== -1) {
-							// Content before <thought> is normal markdown
+						// Also check for <file_action that might appear outside thought blocks
+						const fileActionIdx = lowerBuffer.indexOf('<file_action');
+
+						if (startIdx !== -1 && (fileActionIdx === -1 || startIdx <= fileActionIdx)) {
+							// <thought> tag comes first
 							if (startIdx > 0) {
-								progress([{
-									kind: 'markdownContent',
-									content: new MarkdownString(currentBuffer.substring(0, startIdx)),
-								}]);
+								const beforeThought = stripFileActionTags(currentBuffer.substring(0, startIdx));
+								if (beforeThought.length > 0) {
+									progress([{
+										kind: 'markdownContent',
+										content: new MarkdownString(beforeThought),
+									}]);
+								}
 							}
 							inThought = true;
 							this._logService.debug('[Ollama Agent] Entering <thought> mode');
 							currentBuffer = currentBuffer.substring(startIdx + '<thought>'.length);
+						} else if (fileActionIdx !== -1) {
+							// <file_action> tag found outside thought block — suppress it
+							// Emit anything before the tag as markdown
+							if (fileActionIdx > 0) {
+								const beforeAction = currentBuffer.substring(0, fileActionIdx);
+								if (beforeAction.trim().length > 0) {
+									progress([{
+										kind: 'markdownContent',
+										content: new MarkdownString(beforeAction),
+									}]);
+								}
+								// CRITICAL FIX: Slice out the emitted text so it doesn't get repeated 
+								// while we wait for the rest of the file_action tag to arrive in the stream.
+								currentBuffer = currentBuffer.substring(fileActionIdx);
+								continue;
+							}
+
+							// Find end of the tag: either self-closing (/>) or paired (</file_action>)
+							const selfCloseIdx = currentBuffer.indexOf('/>', fileActionIdx);
+							const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', fileActionIdx);
+
+							if (selfCloseIdx !== -1 && (pairedCloseIdx === -1 || selfCloseIdx < pairedCloseIdx)) {
+								// Self-closing tag
+								this._logService.debug(`[Ollama Agent] Suppressed file_action tag from UI`);
+								currentBuffer = currentBuffer.substring(selfCloseIdx + 2);
+							} else if (pairedCloseIdx !== -1) {
+								// Paired tag
+								this._logService.debug(`[Ollama Agent] Suppressed file_action tag from UI`);
+								currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
+							} else {
+								// Tag is incomplete, wait for more data
+								break;
+							}
 						} else {
-							// No start tag yet. Safely emit most of the buffer as markdown.
-							// Keep a buffer at the end to prevent splitting a tag like "<thought>"
-							const safeLength = Math.max(0, currentBuffer.length - 10);
+							// No special tags. Safely emit most of the buffer as markdown.
+							// Keep a buffer at the end to prevent splitting a tag
+							const safeLength = Math.max(0, currentBuffer.length - 15);
 							if (safeLength > 0) {
-								progress([{
-									kind: 'markdownContent',
-									content: new MarkdownString(currentBuffer.substring(0, safeLength)),
-								}]);
+								const safeText = stripFileActionTags(currentBuffer.substring(0, safeLength));
+								if (safeText.length > 0) {
+									progress([{
+										kind: 'markdownContent',
+										content: new MarkdownString(safeText),
+									}]);
+								}
 								currentBuffer = currentBuffer.substring(safeLength);
 							}
 							break; // Wait for more data
@@ -593,24 +681,18 @@ export class OllamaChatAgent extends Disposable {
 					} else {
 						const endIdx = lowerBuffer.indexOf('</thought>');
 						if (endIdx !== -1) {
-							// Content before </thought> is reasoning
+							// Content before </thought> is reasoning — log it, don't display
 							if (endIdx > 0) {
-								progress([{
-									kind: 'thinking',
-									value: currentBuffer.substring(0, endIdx),
-								}]);
+								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, endIdx)}`);
 							}
 							inThought = false;
 							this._logService.debug('[Ollama Agent] Exiting <thought> mode');
 							currentBuffer = currentBuffer.substring(endIdx + '</thought>'.length);
 						} else {
-							// Still thinking. Safely emit most of it.
+							// Still thinking. Safely accumulate but don't emit.
 							const safeLength = Math.max(0, currentBuffer.length - 11);
 							if (safeLength > 0) {
-								progress([{
-									kind: 'thinking',
-									value: currentBuffer.substring(0, safeLength),
-								}]);
+								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, safeLength)}`);
 								currentBuffer = currentBuffer.substring(safeLength);
 							}
 							break; // Wait for more data
@@ -622,13 +704,88 @@ export class OllamaChatAgent extends Disposable {
 			// Empty any remaining buffer
 			if (currentBuffer.length > 0) {
 				if (inThought) {
-					progress([{ kind: 'thinking', value: currentBuffer }]);
+					this._logService.debug(`[Ollama Thought] ${currentBuffer}`);
 				} else {
-					progress([{ kind: 'markdownContent', content: new MarkdownString(currentBuffer) }]);
+					const cleaned = stripFileActionTags(currentBuffer);
+					if (cleaned.length > 0) {
+						progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
+					}
 				}
 			}
 
 			this._logService.info(`[Ollama] Request completed, response length: ${totalLength}`);
+
+			// Parse memory updates
+			const taskMatch = fullResponse.match(/```task\n([\s\S]*?)```/);
+			if (taskMatch) {
+				this._agentMemory.updateFile('task', taskMatch[1].trim()).catch(() => { });
+			}
+			const planMatch = fullResponse.match(/```plan\n([\s\S]*?)```/);
+			if (planMatch) {
+				this._agentMemory.updateFile('plan', planMatch[1].trim()).catch(() => { });
+			}
+			const summaryMatch = fullResponse.match(/```summary\n([\s\S]*?)```/);
+			if (summaryMatch) {
+				this._agentMemory.updateFile('summary', summaryMatch[1].trim()).catch(() => { });
+			}
+
+			// Parse agent actions (files and commands) with follow-up loop
+			let depth = 0;
+			let responseToProcess = fullResponse;
+
+			while (depth < OllamaChatAgent.MAX_AGENT_LOOP_DEPTH) {
+				const terminalOutputs = await this.executeAgentActions(responseToProcess, progress);
+
+				if (terminalOutputs.length === 0) {
+					break; // No terminal commands were run, no need to follow up
+				}
+
+				depth++;
+				this._logService.info(`[Ollama] Agentic follow-up loop iteration ${depth}`);
+
+				// Build follow-up context with terminal output
+				const outputContext = terminalOutputs.map(t =>
+					`Command: \`${t.command}\`\n<terminal_output>\n${t.output}\n</terminal_output>`
+				).join('\n\n');
+
+				const followUpMessage = `Terminal output from the commands you just ran:\n\n${outputContext}\n\nNow provide a brief, fresh summary of the results for the user. Do NOT repeat or echo anything from before. Start your response with the findings.`;
+
+				// Use a minimal assistant message to avoid the LLM echoing/repeating the previous text
+				const commandList = terminalOutputs.map(t => t.command).join(', ');
+				messages.push({ role: 'assistant', content: `[Executed: ${commandList}]` });
+				messages.push({ role: 'user', content: followUpMessage });
+
+				progress([{
+					kind: 'progressMessage',
+					content: new MarkdownString('Analyzing terminal output...'),
+				}]);
+
+				let followUpResponse = '';
+				for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
+					if (token.isCancellationRequested) {
+						break;
+					}
+					followUpResponse += chunk;
+
+					// Emit visible content (strip thought blocks and file_action tags)
+					const cleaned = stripFileActionTags(chunk);
+					if (cleaned.length > 0) {
+						progress([{
+							kind: 'markdownContent',
+							content: new MarkdownString(cleaned),
+						}]);
+					}
+				}
+
+				responseToProcess = followUpResponse;
+
+				// Check if the follow-up contains more actions
+				const hasMoreActions = /<file_action\s+/i.test(followUpResponse);
+				if (!hasMoreActions) {
+					break;
+				}
+			}
+
 			return {};
 
 		} catch (error: unknown) {
@@ -644,6 +801,169 @@ export class OllamaChatAgent extends Disposable {
 				},
 			};
 		}
+	}
+
+	// ========================================================================
+	// Autonomous Actions
+	// ========================================================================
+
+	private async executeAgentActions(fullResponse: string, progress: (progress: IChatProgress[]) => void): Promise<{ command: string; output: string }[]> {
+		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?(?:\s+command="([^"]+)")?\s*(?:>([\s\S]*?)<\/file_action>|\/>)/g;
+		let match;
+		const terminalOutputs: { command: string; output: string }[] = [];
+
+		const workspace = this.workspaceService.getWorkspace();
+		if (workspace.folders.length === 0) {
+			return [];
+		}
+		const rootUri = workspace.folders[0].uri;
+
+		while ((match = regex.exec(fullResponse)) !== null) {
+			const type = match[1];
+			const filePath = match[2];
+			const command = match[3];
+			const content = match[4] || '';
+
+			const actionId = type === 'runCommand' ? `cmd:${command}` : `file:${type}:${filePath}`;
+
+			// Check for consent
+			if (!this._alwaysAllowedActions.has(actionId)) {
+				const message = type === 'runCommand'
+					? `The AI wants to run a terminal command: \`${command}\``
+					: `The AI wants to ${type} the file: \`${filePath}\``;
+
+				const result = await this.dialogService.prompt<string>({
+					type: 'info',
+					message: 'Agent Action Request',
+					detail: message,
+					buttons: [
+						{ label: 'Allow Once', run: () => 'allow' },
+						{ label: 'Always Allow', run: () => 'always' }
+					],
+					cancelButton: { label: 'Deny', run: () => 'deny' }
+				});
+
+				if (result.result === 'deny' || !result.result) {
+					progress([{
+						kind: 'progressMessage',
+						content: new MarkdownString(`User denied action: **${type}**`),
+					}]);
+					continue;
+				}
+
+				if (result.result === 'always') {
+					this._alwaysAllowedActions.add(actionId);
+				}
+			}
+
+			try {
+				if (type === 'runCommand' && command) {
+					const terminal = await this.getOrCreateAgentTerminal();
+					await terminal.sendText(command, true);
+
+					progress([{
+						kind: 'progressMessage',
+						content: new MarkdownString(`Running: \`${command}\``),
+					}]);
+
+					// Capture terminal output
+					const output = await this.captureTerminalOutput(terminal);
+					if (output.length > 0) {
+						terminalOutputs.push({ command, output });
+					}
+				} else if (filePath) {
+					const fileUri = URI.joinPath(rootUri, filePath);
+
+					if (type === 'create' || type === 'overwrite') {
+						const dirUri = dirname(fileUri);
+						try { await this.fileService.createFolder(dirUri); } catch { }
+
+						await this.fileService.writeFile(fileUri, VSBuffer.fromString(content));
+						await this.editorService.openEditor({ resource: fileUri });
+
+						progress([{
+							kind: 'progressMessage',
+							content: new MarkdownString(`Executed action: **${type}** \`${filePath}\``),
+						}]);
+					} else if (type === 'delete') {
+						await this.fileService.del(fileUri, { recursive: true });
+						progress([{
+							kind: 'progressMessage',
+							content: new MarkdownString(`Executed action: **delete** \`${filePath}\``),
+						}]);
+					}
+				}
+			} catch (err) {
+				this._logService.error(`[Ollama] Failed to execute action ${type}: ${err}`);
+			}
+		}
+
+		return terminalOutputs;
+	}
+
+	/**
+	 * Get or create the reusable "Dark Matter Agent" terminal instance.
+	 * Searches by title to avoid creating duplicate terminal tabs.
+	 */
+	private async getOrCreateAgentTerminal(): Promise<ITerminalInstance> {
+		// First, try to find an existing "Dark Matter Agent" terminal by title
+		const existing = this.terminalService.instances.find(
+			i => i.title === 'Dark Matter Agent' || i.shellLaunchConfig?.name === 'Dark Matter Agent'
+		);
+		if (existing) {
+			this._agentTerminal = existing;
+			return existing;
+		}
+
+		// No existing terminal found — create a new one
+		const terminal = await this.terminalService.createTerminal({ config: { name: 'Dark Matter Agent' } });
+		this._agentTerminal = terminal;
+		return terminal;
+	}
+
+	/**
+	 * Capture terminal output after a command is sent.
+	 * Listens for data events and waits for silence or absolute timeout.
+	 */
+	private captureTerminalOutput(terminal: ITerminalInstance): Promise<string> {
+		return new Promise<string>(resolve => {
+			let output = '';
+			let silenceTimer: ReturnType<typeof setTimeout> | undefined;
+			const disposables = new DisposableStore();
+
+			const finish = () => {
+				if (silenceTimer) {
+					clearTimeout(silenceTimer);
+				}
+				disposables.dispose();
+				// Truncate to max length
+				const truncated = output.length > OllamaChatAgent.MAX_TERMINAL_OUTPUT
+					? output.substring(output.length - OllamaChatAgent.MAX_TERMINAL_OUTPUT)
+					: output;
+				resolve(truncated.trim());
+			};
+
+			// Listen for data from this specific terminal
+			disposables.add(this.terminalService.onAnyInstanceData(e => {
+				if (e.instance !== terminal) {
+					return;
+				}
+				output += e.data;
+
+				// Reset silence timer on each data event
+				if (silenceTimer) {
+					clearTimeout(silenceTimer);
+				}
+				silenceTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_SILENCE_TIMEOUT);
+			}));
+
+			// Absolute timeout to prevent waiting forever (e.g. for `ping` without -n)
+			const absoluteTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_ABSOLUTE_TIMEOUT);
+			disposables.add({ dispose: () => clearTimeout(absoluteTimer) });
+
+			// Start the silence timer immediately in case the command produces no output
+			silenceTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_SILENCE_TIMEOUT);
+		});
 	}
 
 	// ========================================================================
@@ -735,8 +1055,8 @@ export class OllamaChatAgent extends Disposable {
 		if (isLocation(value)) {
 			return `--- ${basename(value.uri)} (L${value.range.startLineNumber}-${value.range.endLineNumber}) ---`;
 		}
-		if (value && typeof value === 'object' && hasKey(value, 'value') && typeof value.value === 'string') {
-			return `--- ${variable.isSelection ? 'Selection' : variable.name} ---\n${value.value}`;
+		if (value && typeof value === 'object' && hasKey(value, { value: true }) && typeof (value as Record<string, unknown>).value === 'string') {
+			return `--- ${variable.isSelection ? 'Selection' : variable.name} ---\n${(value as Record<string, string>).value}`;
 		}
 		return undefined;
 	}
