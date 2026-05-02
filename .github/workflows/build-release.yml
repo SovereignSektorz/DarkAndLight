@@ -68,7 +68,7 @@ jobs:
   # Linux x64 Build
   # ============================================================
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -97,7 +97,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
+          for i in {1..5}; do sudo apt-get update && break || sleep 5; done
           sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg
 
       - name: Install dependencies
