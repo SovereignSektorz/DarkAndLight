@@ -97,7 +97,9 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo sed -i 's/azure\.//g' /etc/apt/sources.list
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
+          sudo rm -rf /var/lib/apt/lists/*
           for i in {1..5}; do sudo apt-get update && break || sleep 5; done
           sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg
 
