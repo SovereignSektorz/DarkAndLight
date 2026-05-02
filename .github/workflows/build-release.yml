@@ -101,7 +101,14 @@ jobs:
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list
           sudo rm -rf /var/lib/apt/lists/*
           for i in {1..5}; do sudo apt-get update && break || sleep 5; done
-          sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg
+          sudo apt-get install -y libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev rpm fakeroot dpkg debhelper ca-certificates
+
+      - name: Debug Environment
+        run: |
+          which fakeroot
+          which dpkg-deb
+          ls -l ..
+          ls -l ../VSCode-linux-x64 || echo "VSCode folder not found!"
 
       - name: Install dependencies
         run: npm ci
@@ -119,12 +126,11 @@ jobs:
 
       - name: Create tar.gz archive
         run: |
-          tar -czf ./DarkMatter-linux-x64.tar.gz ../VSCode-linux-x64
+          tar -czf ./DarkMatter-linux-x64.tar.gz --transform='s/VSCode-linux-x64/DarkMatter-linux-x64/' ../VSCode-linux-x64
 
       - name: Build .deb package
         run: |
-          npm run gulp -- vscode-linux-x64-build-deb
-          mv ../*.deb ./ || true
+          npm run gulp -- vscode-linux-x64-prepare-deb && npm run gulp -- vscode-linux-x64-build-deb
         continue-on-error: true
 
       - name: Upload tar.gz artifact
@@ -138,7 +144,7 @@ jobs:
         if: success()
         with:
           name: DarkMatter-linux-x64-deb
-          path: ./*.deb
+          path: .build/linux/deb/amd64/deb/*.deb
         continue-on-error: true
 
   # ============================================================
