@@ -50,6 +50,15 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 
 ---
 
+## Downloads / Releases
+
+If you prefer not to build from source, you can download pre-compiled binaries for Windows and Linux directly from the [GitHub Releases page](https://github.com/abmina/dark-matter-ide/releases).
+
+*   **Windows**: Download the `.exe` installer for an automated setup.
+*   **Linux (Debian/Ubuntu)**: Download the `.deb` package for an easy installation, or the `.tar.gz` archive for a portable build.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
