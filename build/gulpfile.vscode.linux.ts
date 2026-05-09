@@ -127,6 +127,8 @@ function buildDebPackage(arch: string) {
 
 	return async () => {
 		await exec(`chmod 755 ${product.applicationName}-${debArch}/DEBIAN/postinst ${product.applicationName}-${debArch}/DEBIAN/prerm ${product.applicationName}-${debArch}/DEBIAN/postrm`, { cwd });
+		await exec(`chmod -R a+rX,u+w,go-w ${product.applicationName}-${debArch}/usr`, { cwd });
+		await exec(`chmod 4755 ${product.applicationName}-${debArch}/usr/share/${product.applicationName}/chrome-sandbox || true`, { cwd });
 		await exec('mkdir -p deb', { cwd });
 		await exec(`fakeroot dpkg-deb -Zxz -b ${product.applicationName}-${debArch} deb`, { cwd });
 	};
