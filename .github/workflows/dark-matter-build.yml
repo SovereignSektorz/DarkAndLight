@@ -1,16 +1,6 @@
 name: Dark Matter Build
 
 on:
-  push:
-    branches:
-      - master
-      - linux-compile-test
-    tags:
-      - 'v*'
-  pull_request:
-    branches:
-      - master
-      - linux-compile-test
   workflow_dispatch:
 
 jobs:
@@ -38,6 +28,7 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Electron
         run: npm run electron
@@ -100,6 +91,7 @@ jobs:
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download Electron
         run: npm run electron

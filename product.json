@@ -2,7 +2,7 @@
 	"nameShort": "Dark Matter",
 	"nameLong": "Dark Matter",
 	"applicationName": "dark-matter",
-	"darkMatterVersion": "1.0.0",
+	"darkmatterVersion": "1.0.0",
 	"dataFolderName": ".dark-matter",
 	"win32MutexName": "darkmatter",
 	"licenseName": "MIT",
@@ -266,7 +266,6 @@
 		}
 	],
 	"builtInExtensionsEnabledWithAutoUpdates": [],
-	"darkmatterVersion": "1.0.0-beta.1",
 	"version": "1.116.0",
 	"commit": "a02b1016fddb11253cdee33a72817f1117db3f4e",
 	"date": "2026-04-15T00:46:42.525Z"
