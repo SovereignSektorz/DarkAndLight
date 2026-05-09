@@ -54,16 +54,16 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 
 If you prefer not to build from source, you can download pre-compiled binaries for Windows and Linux directly from the [GitHub Releases page](https://github.com/abmina/dark-matter-ide/releases).
 
-*   **Windows**: Download the `.exe` installer for an automated setup.
+*   **Windows**: Download the `.zip` archive for a portable build. (Automated `.exe` installer coming soon!)
 *   **Linux (Debian/Ubuntu)**: Download the `.deb` package for an easy installation, or the `.tar.gz` archive for a portable build.
 
 ---
 
-## Getting Started
+## Building From Source
 
 ### Prerequisites
 
-To build Dark Matter IDE, you will need to install the following based on your OS:
+If you want to build Dark Matter IDE from source, you will need to install the following based on your OS:
 
 #### Windows
 1.  **Node.js** (v22.x LTS recommended)
@@ -157,7 +157,7 @@ Dark Matter is designed with a privacy-first architecture. All AI features are e
 ---
 
 ## Contributing
-Contributions to the project are reviewed and welcomed. 
+Contributions to the project are reviewed and welcomed.
 1.  Fork the repository.
 2.  Develop features in a dedicated branch (`git checkout -b feature/name`).
 3.  Commit changes with descriptive messages.
