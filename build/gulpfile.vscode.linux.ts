@@ -89,7 +89,7 @@ function prepareDebPackage(arch: string) {
 				const that = this;
 				gulp.src('resources/linux/debian/control.template', { base: '.' })
 					.pipe(replace('@@NAME@@', product.applicationName))
-					.pipe(replace('@@VERSION@@', packageJson.version + '-' + linuxPackageRevision))
+					.pipe(replace('@@VERSION@@', (process.env.DARK_MATTER_VERSION || (product as typeof product & { darkMatterVersion?: string }).darkMatterVersion || packageJson.version) + '-' + linuxPackageRevision))
 					.pipe(replace('@@ARCHITECTURE@@', debArch))
 					.pipe(replace('@@DEPENDS@@', dependencies.join(', ')))
 					.pipe(replace('@@RECOMMENDS@@', debianRecommendedDependencies.join(', ')))
@@ -198,7 +198,7 @@ function prepareRpmPackage(arch: string) {
 			.pipe(replace('@@NAME@@', product.applicationName))
 			.pipe(replace('@@NAME_LONG@@', product.nameLong))
 			.pipe(replace('@@ICON@@', product.linuxIconName))
-			.pipe(replace('@@VERSION@@', packageJson.version))
+			.pipe(replace('@@VERSION@@', (process.env.DARK_MATTER_VERSION || (product as typeof product & { darkMatterVersion?: string }).darkMatterVersion || packageJson.version)))
 			.pipe(replace('@@RELEASE@@', linuxPackageRevision.toString()))
 			.pipe(replace('@@ARCHITECTURE@@', rpmArch))
 			.pipe(replace('@@LICENSE@@', product.licenseName))

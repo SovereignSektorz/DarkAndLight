@@ -5,6 +5,8 @@ on:
     branches:
       - master
       - linux-compile-test
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - master
@@ -40,10 +42,20 @@ jobs:
       - name: Download Electron
         run: npm run electron
 
+      - name: Set Version
+        id: set_version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "DARK_MATTER_VERSION=$VERSION" >> $GITHUB_ENV
+          fi
+
       - name: Build Application
         run: npm run gulp -- vscode-win32-x64
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          DARK_MATTER_VERSION: ${{ env.DARK_MATTER_VERSION }}
 
       - name: Create ZIP archive
         shell: pwsh
@@ -92,10 +104,20 @@ jobs:
       - name: Download Electron
         run: npm run electron
 
+      - name: Set Version
+        id: set_version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "DARK_MATTER_VERSION=$VERSION" >> $GITHUB_ENV
+          fi
+
       - name: Build Application
         run: npm run gulp -- vscode-linux-x64
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          DARK_MATTER_VERSION: ${{ env.DARK_MATTER_VERSION }}
 
       - name: Create tar.gz archive
         run: |
