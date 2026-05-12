@@ -1,6 +1,7 @@
-Template: @@NAME@@/add-microsoft-repo
+Template: @@NAME@@/add-repo
 Type: boolean
-Default: true
-Description: Add Microsoft apt repository for Visual Studio Code?
- The installer would like to add the Microsoft repository and signing
- key to update VS Code through apt.
+Default: false
+Description: Add Dark Matter repository?
+ The installer can add the repository to your system to ensure you receive
+ the latest updates automatically.
+ key to update Dark Matter through apt.

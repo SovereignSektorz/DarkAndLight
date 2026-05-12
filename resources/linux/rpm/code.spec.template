@@ -1,12 +1,12 @@
 Name:     @@NAME@@
 Version:  @@VERSION@@
 Release:  @@RELEASE@@.el8
-Summary:  Code editing. Redefined.
+Summary:  AI Coding Privacy. Redefined.
 Group:    Development/Tools
-Vendor:   Microsoft Corporation
-Packager: Visual Studio Code Team <vscode-linux@microsoft.com>
+Vendor:   Dark Matter Team
+Packager: Dark Matter Team <https://github.com/abmina/dark-matter-ide/issues>
 License:  @@LICENSE@@
-URL:      https://code.visualstudio.com/
+URL:      https://github.com/abmina/dark-matter-ide
 Icon:     @@NAME@@.xpm
 Requires: @@DEPENDENCIES@@
 Recommends: @@RECOMMENDS@@

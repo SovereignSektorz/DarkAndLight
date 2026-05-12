@@ -2,10 +2,10 @@ name: Component Fixture Tests
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
     branches:
-      - main
+      - master
       - 'release/*'
 
 permissions:

@@ -277,8 +277,8 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration)
 			},
 			[VerifyExtensionSignatureConfigKey]: {
 				type: 'boolean',
-				description: localize('extensions.verifySignature', "When enabled, extensions are verified to be signed before getting installed."),
-				default: true,
+				description: localize('extensions.verifySignature', "When enabled, extensions are verified to be signed before getting installed. Note: Dark Matter IDE uses Open VSX, which does not use Microsoft's signing infrastructure. Disable this setting to avoid installation errors."),
+				default: false,
 				scope: ConfigurationScope.APPLICATION,
 				included: isNative
 			},

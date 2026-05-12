@@ -30,6 +30,12 @@ import { OllamaStatusBarEntry } from './ollamaStatusBar.js';
 import { WorkspaceChunkIndex } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
+import {
+	OllamaCreateFileTool, OllamaCreateFileToolData,
+	OllamaDeleteFileTool, OllamaDeleteFileToolData,
+	OllamaRunCommandTool, OllamaRunCommandToolData,
+} from './ollamaTools.js';
+import { ILanguageModelToolsService } from '../../common/tools/languageModelToolsService.js';
 
 const OLLAMA_EXTENSION_ID = new ExtensionIdentifier('vscode.chat');
 const OLLAMA_VENDOR = 'ollama';
@@ -175,7 +181,7 @@ class OllamaLanguageModelChatProvider implements ILanguageModelChatProvider {
 		const ollamaMessages = messages.map(msg => ({
 			role: msg.role === 0 ? 'system' as const :
 				msg.role === 1 ? 'user' as const : 'assistant' as const,
-			content: msg.content.map(part => 'value' in part ? part.value : '').join(''),
+			content: msg.content.map(part => (typeof (part as { value?: unknown }).value !== 'undefined' ? (part as { value: string }).value : '')).join(''),
 		}));
 
 		const stream = this.ollamaProvider.sendChatRequest(ollamaMessages, token);
@@ -196,7 +202,7 @@ class OllamaLanguageModelChatProvider implements ILanguageModelChatProvider {
 		if (typeof message === 'string') {
 			return Math.ceil(message.length / 4);
 		}
-		const text = message.content.map(p => 'value' in p ? p.value : '').join('');
+		const text = message.content.map(p => (typeof (p as { value?: unknown }).value !== 'undefined' ? (p as { value: string }).value : '')).join('');
 		return Math.ceil(text.length / 4);
 	}
 
@@ -221,6 +227,7 @@ export class OllamaContribution extends Disposable {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILanguageModelsService private readonly languageModelsService: ILanguageModelsService,
 		@ILogService private readonly logService: ILogService,
+		@ILanguageModelToolsService private readonly toolsService: ILanguageModelToolsService,
 	) {
 		super();
 		this.initialize();
@@ -245,6 +252,16 @@ export class OllamaContribution extends Disposable {
 
 		// Create the status bar entry for quick AI settings access
 		this._register(this.instantiationService.createInstance(OllamaStatusBarEntry, ollamaProvider));
+
+		// Register Ollama agent tools for the tool invocation pipeline
+		const createFileTool = this.instantiationService.createInstance(OllamaCreateFileTool);
+		this._register(this.toolsService.registerTool(OllamaCreateFileToolData, createFileTool));
+
+		const deleteFileTool = this.instantiationService.createInstance(OllamaDeleteFileTool);
+		this._register(this.toolsService.registerTool(OllamaDeleteFileToolData, deleteFileTool));
+
+		const runCommandTool = this.instantiationService.createInstance(OllamaRunCommandTool);
+		this._register(this.toolsService.registerTool(OllamaRunCommandToolData, runCommandTool));
 
 		// Create the LM provider for the model picker
 		const lmProvider = new OllamaLanguageModelChatProvider(ollamaProvider, this.logService);

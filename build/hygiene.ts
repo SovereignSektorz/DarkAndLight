@@ -126,15 +126,28 @@ export function hygiene(some: NodeJS.ReadWriteStream | string[] | undefined, run
 		this.emit('data', file);
 	});
 
+const darkMatterCopyrightHeaderLines = [
+	'/*---------------------------------------------------------------------------------------------',
+	' *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.',
+	' *  Licensed under the MIT License. See License.txt in the project root for license information.',
+	' *--------------------------------------------------------------------------------------------*/',
+];
+
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
 
-		for (let i = 0; i < copyrightHeaderLines.length; i++) {
-			if (lines[i] !== copyrightHeaderLines[i]) {
-				console.error(file.relative + ': Missing or bad copyright statement');
-				errorCount++;
-				break;
-			}
+		// Files in our custom ollama/ directory may use either the upstream Microsoft header
+		// or the Dark Matter IDE Contributors header.
+		const isDarkMatterFile = file.relative.replace(/\\/g, '/').includes('contrib/chat/browser/ollama/');
+
+		const microsoftMatch = copyrightHeaderLines.every((l, i) => lines[i] === l);
+		const darkMatterMatch = darkMatterCopyrightHeaderLines.every((l, i) => lines[i] === l);
+
+		const valid = isDarkMatterFile ? (microsoftMatch || darkMatterMatch) : microsoftMatch;
+
+		if (!valid) {
+			console.error(file.relative + ': Missing or bad copyright statement');
+			errorCount++;
 		}
 
 		this.emit('data', file);

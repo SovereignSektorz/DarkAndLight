@@ -6,8 +6,8 @@
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { Disposable, DisposableStore } from '../../../../../base/common/lifecycle.js';
-import { basename, dirname } from '../../../../../base/common/resources.js';
-import { VSBuffer } from '../../../../../base/common/buffer.js';
+import { basename } from '../../../../../base/common/resources.js';
+
 import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
 import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
 import { URI } from '../../../../../base/common/uri.js';
@@ -24,8 +24,9 @@ import { ITextModel } from '../../../../../editor/common/model.js';
 import { IEditor } from '../../../../../editor/common/editorCommon.js';
 import { isLocation } from '../../../../../editor/common/languages.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
-import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
-import { ITerminalInstance, ITerminalService } from '../../../../contrib/terminal/browser/terminal.js';
+
+import { ILanguageModelToolsService, CountTokensCallback } from '../../common/tools/languageModelToolsService.js';
+import { OllamaCreateFileToolId, OllamaDeleteFileToolId, OllamaRunCommandToolId } from './ollamaTools.js';
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
@@ -82,28 +83,19 @@ export class OllamaChatAgent extends Disposable {
 	private _cachedSourceFiles: string | undefined;
 	private _lastScanTime = 0;
 	private readonly SCAN_INTERVAL_MS = 120_000; // rescan every 2 minutes
-	private readonly _alwaysAllowedActions = new Set<string>();
-	/** Reusable terminal instance for agent commands */
-	// @ts-ignore: reserved for future agent terminal reuse
-	private _agentTerminal: ITerminalInstance | undefined;
 
 	/** Max iterations for the agentic follow-up loop */
 	private static readonly MAX_AGENT_LOOP_DEPTH = 3;
-	/** Max terminal output to capture (characters) */
-	private static readonly MAX_TERMINAL_OUTPUT = 4000;
-	/** Silence timeout before considering command complete (ms) */
-	private static readonly TERMINAL_SILENCE_TIMEOUT = 5000;
-	/** Absolute timeout for terminal output capture (ms) */
-	private static readonly TERMINAL_ABSOLUTE_TIMEOUT = 30000;
 
-	/** Strip <file_action> and <thought> tags from text before displaying to user */
+	/** Strip <file_action> and <thought> tags (and their full content) from text */
 	private static stripFileActionTags(text: string): string {
 		// Remove self-closing: <file_action ... />
-		let cleaned = text.replace(/<file_action\s+[^>]*?\/>/gi, '');
-		// Remove paired: <file_action ...>...</file_action>
-		cleaned = cleaned.replace(/<file_action\s+[^>]*?>[\s\S]*?<\/file_action>/gi, '');
-		// Remove any stray closing tags that lost their opener
-		cleaned = cleaned.replace(/<\/file_action>/gi, '');
+		let cleaned = text.replace(/<file_action\b[^>]*\/>/gi, '');
+		// Remove paired tags WITH content: <file_action ...>...</file_action>
+		// Must use greedy [\s\S]* to reliably match large multi-line file content
+		cleaned = cleaned.replace(/<file_action\b[^>]*>[\s\S]*?<\/file_action>/gi, '');
+		// Remove any stray opening/closing tags that lost their pair
+		cleaned = cleaned.replace(/<\/?file_action[^>]*>/gi, '');
 		// Remove thought blocks: <thought>...</thought>
 		cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
 		// Remove stray thought tags
@@ -111,6 +103,54 @@ export class OllamaChatAgent extends Disposable {
 		// Clean up excessive blank lines left behind
 		cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 		return cleaned;
+	}
+
+	/**
+	 * Produce a compact summary of an agent response suitable for memory storage.
+	 * File action blocks are replaced with one-line descriptions so the model
+	 * never sees file contents re-injected into its context on future turns.
+	 */
+	private static summarizeResponseForMemory(text: string): string {
+		// Replace self-closing actions: <file_action type="delete" path="..." />
+		let summary = text.replace(
+			/<file_action\b([^>]*)\/>/gi,
+			(_match, attrs: string) => {
+				const type = (attrs.match(/type="([^"]*)"/) ?? [])[1] ?? 'action';
+				const path = (attrs.match(/path="([^"]*)"/) ?? [])[1];
+				const cmd = (attrs.match(/command="([^"]*)"/) ?? [])[1];
+				if (cmd) { return `[Ran command: ${cmd}]`; }
+				if (path) { return `[${OllamaChatAgent.actionLabel(type)}: ${path}]`; }
+				return `[${type} action]`;
+			}
+		);
+		// Replace paired actions (with file content): <file_action ...>...</file_action>
+		summary = summary.replace(
+			/<file_action\b([^>]*)>[\s\S]*?<\/file_action>/gi,
+			(_match, attrs: string) => {
+				const type = (attrs.match(/type="([^"]*)"/) ?? [])[1] ?? 'action';
+				const path = (attrs.match(/path="([^"]*)"/) ?? [])[1];
+				if (path) { return `[${OllamaChatAgent.actionLabel(type)}: ${path}]`; }
+				return `[${type} action]`;
+			}
+		);
+		// Strip stray tags, thought blocks, and collapse whitespace
+		summary = summary
+			.replace(/<\/?file_action[^>]*>/gi, '')
+			.replace(/<thought>[\s\S]*?<\/thought>/gi, '')
+			.replace(/<\/?thought>/gi, '')
+			.replace(/\s+/g, ' ')
+			.trim();
+		return summary.substring(0, 1000);
+	}
+
+	private static actionLabel(type: string): string {
+		switch (type.toLowerCase()) {
+			case 'create': return 'Created file';
+			case 'overwrite': return 'Overwrote file';
+			case 'delete': return 'Deleted file';
+			case 'runcommand': return 'Ran command';
+			default: return `${type} action`;
+		}
 	}
 
 	constructor(
@@ -124,9 +164,8 @@ export class OllamaChatAgent extends Disposable {
 		@IEditorService private readonly editorService: IEditorService,
 		@ILoggerService private readonly loggerService: ILoggerService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@IDialogService private readonly dialogService: IDialogService,
-		@ITerminalService private readonly terminalService: ITerminalService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
+		@ILanguageModelToolsService private readonly toolsService: ILanguageModelToolsService,
 	) {
 		super();
 
@@ -546,8 +585,9 @@ export class OllamaChatAgent extends Disposable {
 			messages.push(msg);
 		}
 
-		// Log activity
-		this._agentMemory.logActivity(`User request: ${request.message.substring(0, 100)}`).catch(() => { });
+		// Log the user's request to activity log
+		const userMessageForLog = request.message.substring(0, 150);
+		this._agentMemory.logActivity(`[User] ${userMessageForLog}`).catch(() => { });
 
 		// Resolve explicitly attached context
 		const contextParts: string[] = [];
@@ -594,6 +634,7 @@ export class OllamaChatAgent extends Disposable {
 			// Helper reference for file action stripping
 			const stripFileActionTags = OllamaChatAgent.stripFileActionTags;
 
+			// Stream the response in real-time, suppressing <thought> and <file_action> tags
 			for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
 				if (token.isCancellationRequested) {
 					break;
@@ -602,107 +643,75 @@ export class OllamaChatAgent extends Disposable {
 				currentBuffer += chunk;
 				fullResponse += chunk;
 
-				// Diagnostic log for raw chunks
 				this._logService.trace(`[Ollama Agent] Received chunk: ${JSON.stringify(chunk)}`);
 
-				// Process currentBuffer for <thought> and </thought> tags.
-				// Case-insensitive and trimmed tags are more robust.
+				// Process currentBuffer for <thought> and <file_action> tags
 				while (currentBuffer.length > 0) {
 					const lowerBuffer = currentBuffer.toLowerCase();
 
 					if (!inThought) {
-						// Check for <thought> tag first
 						const startIdx = lowerBuffer.indexOf('<thought>');
-						// Also check for <file_action that might appear outside thought blocks
 						const fileActionIdx = lowerBuffer.indexOf('<file_action');
 
 						if (startIdx !== -1 && (fileActionIdx === -1 || startIdx <= fileActionIdx)) {
-							// <thought> tag comes first
 							if (startIdx > 0) {
 								const beforeThought = stripFileActionTags(currentBuffer.substring(0, startIdx));
 								if (beforeThought.length > 0) {
-									progress([{
-										kind: 'markdownContent',
-										content: new MarkdownString(beforeThought),
-									}]);
+									progress([{ kind: 'markdownContent', content: new MarkdownString(beforeThought) }]);
 								}
 							}
 							inThought = true;
-							this._logService.debug('[Ollama Agent] Entering <thought> mode');
 							currentBuffer = currentBuffer.substring(startIdx + '<thought>'.length);
 						} else if (fileActionIdx !== -1) {
-							// <file_action> tag found outside thought block — suppress it
-							// Emit anything before the tag as markdown
 							if (fileActionIdx > 0) {
 								const beforeAction = currentBuffer.substring(0, fileActionIdx);
 								if (beforeAction.trim().length > 0) {
-									progress([{
-										kind: 'markdownContent',
-										content: new MarkdownString(beforeAction),
-									}]);
+									progress([{ kind: 'markdownContent', content: new MarkdownString(beforeAction) }]);
 								}
-								// CRITICAL FIX: Slice out the emitted text so it doesn't get repeated 
-								// while we wait for the rest of the file_action tag to arrive in the stream.
 								currentBuffer = currentBuffer.substring(fileActionIdx);
 								continue;
 							}
-
-							// Find end of the tag: either self-closing (/>) or paired (</file_action>)
 							const selfCloseIdx = currentBuffer.indexOf('/>', fileActionIdx);
 							const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', fileActionIdx);
-
 							if (selfCloseIdx !== -1 && (pairedCloseIdx === -1 || selfCloseIdx < pairedCloseIdx)) {
-								// Self-closing tag
-								this._logService.debug(`[Ollama Agent] Suppressed file_action tag from UI`);
 								currentBuffer = currentBuffer.substring(selfCloseIdx + 2);
 							} else if (pairedCloseIdx !== -1) {
-								// Paired tag
-								this._logService.debug(`[Ollama Agent] Suppressed file_action tag from UI`);
 								currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
 							} else {
-								// Tag is incomplete, wait for more data
-								break;
+								break; // Tag incomplete, wait for more data
 							}
 						} else {
-							// No special tags. Safely emit most of the buffer as markdown.
-							// Keep a buffer at the end to prevent splitting a tag
 							const safeLength = Math.max(0, currentBuffer.length - 15);
 							if (safeLength > 0) {
 								const safeText = stripFileActionTags(currentBuffer.substring(0, safeLength));
 								if (safeText.length > 0) {
-									progress([{
-										kind: 'markdownContent',
-										content: new MarkdownString(safeText),
-									}]);
+									progress([{ kind: 'markdownContent', content: new MarkdownString(safeText) }]);
 								}
 								currentBuffer = currentBuffer.substring(safeLength);
 							}
-							break; // Wait for more data
+							break;
 						}
 					} else {
 						const endIdx = lowerBuffer.indexOf('</thought>');
 						if (endIdx !== -1) {
-							// Content before </thought> is reasoning — log it, don't display
 							if (endIdx > 0) {
 								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, endIdx)}`);
 							}
 							inThought = false;
-							this._logService.debug('[Ollama Agent] Exiting <thought> mode');
 							currentBuffer = currentBuffer.substring(endIdx + '</thought>'.length);
 						} else {
-							// Still thinking. Safely accumulate but don't emit.
 							const safeLength = Math.max(0, currentBuffer.length - 11);
 							if (safeLength > 0) {
 								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, safeLength)}`);
 								currentBuffer = currentBuffer.substring(safeLength);
 							}
-							break; // Wait for more data
+							break;
 						}
 					}
 				}
 			}
 
-			// Empty any remaining buffer
+			// Flush remaining buffer
 			if (currentBuffer.length > 0) {
 				if (inThought) {
 					this._logService.debug(`[Ollama Thought] ${currentBuffer}`);
@@ -716,7 +725,7 @@ export class OllamaChatAgent extends Disposable {
 
 			this._logService.info(`[Ollama] Request completed, response length: ${totalLength}`);
 
-			// Parse memory updates
+			// Parse model-initiated memory updates (explicit code blocks in response)
 			const taskMatch = fullResponse.match(/```task\n([\s\S]*?)```/);
 			if (taskMatch) {
 				this._agentMemory.updateFile('task', taskMatch[1].trim()).catch(() => { });
@@ -730,61 +739,68 @@ export class OllamaChatAgent extends Disposable {
 				this._agentMemory.updateFile('summary', summaryMatch[1].trim()).catch(() => { });
 			}
 
-			// Parse agent actions (files and commands) with follow-up loop
+			// Auto-log the AI response and auto-update summary — no special code blocks needed.
+			// Use summarizeResponseForMemory so file contents are replaced with compact
+			// descriptions (e.g. "[Created file: path]") rather than raw code that would
+			// confuse the model into thinking files are already in context.
+			const responseSummary = OllamaChatAgent.summarizeResponseForMemory(fullResponse);
+			this._agentMemory.logActivity(`[Agent] ${responseSummary}`).catch(() => { });
+
+			// Build a lightweight summarizer callback backed by the current Ollama model.
+			// Used by AgentMemory when the summary file exceeds the size limit.
+			const summarizer = async (prompt: string): Promise<string> => {
+				const chunks: string[] = [];
+				const summaryMessages = [
+					{ role: 'system' as const, content: 'You are a concise summarizer. Respond with plain prose only — no markdown, no headings, no bullet points.' },
+					{ role: 'user' as const, content: prompt },
+				];
+				for await (const chunk of this.ollamaProvider.sendChatRequest(summaryMessages, token, selectedModel)) {
+					chunks.push(chunk);
+				}
+				return chunks.join('');
+			};
+
+			this._agentMemory.appendSummaryEntry(userMessageForLog, responseSummary, summarizer).catch(() => { });
+
+			// Execute agent actions via the tool invocation pipeline
+			// Each action is dispatched as a proper tool invocation with native confirmation UI
 			let depth = 0;
 			let responseToProcess = fullResponse;
 
 			while (depth < OllamaChatAgent.MAX_AGENT_LOOP_DEPTH) {
-				const terminalOutputs = await this.executeAgentActions(responseToProcess, progress);
+				const terminalOutputs = await this.executeAgentActions(responseToProcess, request, progress, token);
 
 				if (terminalOutputs.length === 0) {
-					break; // No terminal commands were run, no need to follow up
+					break;
 				}
 
 				depth++;
 				this._logService.info(`[Ollama] Agentic follow-up loop iteration ${depth}`);
 
-				// Build follow-up context with terminal output
 				const outputContext = terminalOutputs.map(t =>
 					`Command: \`${t.command}\`\n<terminal_output>\n${t.output}\n</terminal_output>`
 				).join('\n\n');
 
 				const followUpMessage = `Terminal output from the commands you just ran:\n\n${outputContext}\n\nNow provide a brief, fresh summary of the results for the user. Do NOT repeat or echo anything from before. Start your response with the findings.`;
 
-				// Use a minimal assistant message to avoid the LLM echoing/repeating the previous text
 				const commandList = terminalOutputs.map(t => t.command).join(', ');
 				messages.push({ role: 'assistant', content: `[Executed: ${commandList}]` });
 				messages.push({ role: 'user', content: followUpMessage });
 
-				progress([{
-					kind: 'progressMessage',
-					content: new MarkdownString('Analyzing terminal output...'),
-				}]);
+				progress([{ kind: 'progressMessage', content: new MarkdownString('Analyzing terminal output...') }]);
 
 				let followUpResponse = '';
 				for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
-					if (token.isCancellationRequested) {
-						break;
-					}
+					if (token.isCancellationRequested) { break; }
 					followUpResponse += chunk;
-
-					// Emit visible content (strip thought blocks and file_action tags)
 					const cleaned = stripFileActionTags(chunk);
 					if (cleaned.length > 0) {
-						progress([{
-							kind: 'markdownContent',
-							content: new MarkdownString(cleaned),
-						}]);
+						progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
 					}
 				}
 
 				responseToProcess = followUpResponse;
-
-				// Check if the follow-up contains more actions
-				const hasMoreActions = /<file_action\s+/i.test(followUpResponse);
-				if (!hasMoreActions) {
-					break;
-				}
+				if (!/<file_action\s+/i.test(followUpResponse)) { break; }
 			}
 
 			return {};
@@ -805,11 +821,23 @@ export class OllamaChatAgent extends Disposable {
 	}
 
 	// ========================================================================
-	// Autonomous Actions
+	// Autonomous Actions (via Tool Invocation Pipeline)
 	// ========================================================================
 
-	private async executeAgentActions(fullResponse: string, progress: (progress: IChatProgress[]) => void): Promise<{ command: string; output: string }[]> {
-		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?(?:\s+command="([^"]+)")?\s*(?:>([\s\S]*?)<\/file_action>|\/>)/g;
+	/**
+	 * Parse <file_action> tags from the AI response and dispatch each
+	 * as a tool invocation through ILanguageModelToolsService.
+	 *
+	 * This gives us the Copilot-style confirmation UI:
+	 *   Streaming → WaitingForConfirmation → Executing → Completed
+	 */
+	private async executeAgentActions(
+		fullResponse: string,
+		request: IChatAgentRequest,
+		progress: (progress: IChatProgress[]) => void,
+		token: CancellationToken,
+	): Promise<{ command: string; output: string }[]> {
+		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?(?:\s+command="([^"]+)")?\s*(?:>([\s\S]*?)<\/file_action>|\/\>)/g;
 		let match;
 		const terminalOutputs: { command: string; output: string }[] = [];
 
@@ -819,152 +847,127 @@ export class OllamaChatAgent extends Disposable {
 		}
 		const rootUri = workspace.folders[0].uri;
 
+		// Simple token counter for the tool API
+		const countTokens: CountTokensCallback = async (input: string) => Math.ceil(input.length / 4);
+
 		while ((match = regex.exec(fullResponse)) !== null) {
 			const type = match[1];
 			const filePath = match[2];
 			const command = match[3];
 			const content = match[4] || '';
 
-			const actionId = type === 'runCommand' ? `cmd:${command}` : `file:${type}:${filePath}`;
-
-			// Check for consent
-			if (!this._alwaysAllowedActions.has(actionId)) {
-				const message = type === 'runCommand'
-					? `The AI wants to run a terminal command: \`${command}\``
-					: `The AI wants to ${type} the file: \`${filePath}\``;
-
-				const result = await this.dialogService.prompt<string>({
-					type: 'info',
-					message: 'Agent Action Request',
-					detail: message,
-					buttons: [
-						{ label: 'Allow Once', run: () => 'allow' },
-						{ label: 'Always Allow', run: () => 'always' }
-					],
-					cancelButton: { label: 'Deny', run: () => 'deny' }
-				});
-
-				if (result.result === 'deny' || !result.result) {
-					progress([{
-						kind: 'progressMessage',
-						content: new MarkdownString(`User denied action: **${type}**`),
-					}]);
-					continue;
-				}
-
-				if (result.result === 'always') {
-					this._alwaysAllowedActions.add(actionId);
-				}
-			}
-
 			try {
-				if (type === 'runCommand' && command) {
-					const terminal = await this.getOrCreateAgentTerminal();
-					await terminal.sendText(command, true);
+				const toolCallId = `ollama-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
+				if (type === 'runCommand' && command) {
+					// Emit tool invocation progress to the chat UI
 					progress([{
-						kind: 'progressMessage',
-						content: new MarkdownString(`Running: \`${command}\``),
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Run Command',
+						isComplete: false,
+						invocationMessage: `Running command: ${command}`
 					}]);
 
-					// Capture terminal output
-					const output = await this.captureTerminalOutput(terminal);
-					if (output.length > 0) {
-						terminalOutputs.push({ command, output });
+					// Dispatch as a terminal command tool invocation
+					const result = await this.toolsService.invokeTool(
+						{
+							callId: toolCallId,
+							toolId: OllamaRunCommandToolId,
+							parameters: { command },
+							context: { sessionResource: request.sessionResource },
+						},
+						countTokens,
+						token,
+					);
+
+					// Signal completion to the UI
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Run Command',
+						isComplete: true
+					}]);
+
+					// Extract terminal output from the tool result
+					const outputText = result.content
+						.filter((p): p is { kind: 'text'; value: string } => p.kind === 'text')
+						.map(p => p.value)
+						.join('\n');
+
+					if (outputText.length > 0 && !outputText.includes('(no output)')) {
+						terminalOutputs.push({ command, output: outputText });
 					}
-				} else if (filePath) {
-					const fileUri = URI.joinPath(rootUri, filePath);
+				} else if (filePath && (type === 'create' || type === 'overwrite')) {
+					const parameters = { filePath, content, actionType: type, rootUri: rootUri.toJSON() };
+					const verb = type === 'overwrite' ? 'Overwriting' : 'Creating';
 
-					if (type === 'create' || type === 'overwrite') {
-						const dirUri = dirname(fileUri);
-						try { await this.fileService.createFolder(dirUri); } catch { }
+					// Emit tool invocation progress to the chat UI
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: `${verb} file`,
+						isComplete: false,
+						invocationMessage: `${verb} ${filePath}...`
+					}]);
 
-						await this.fileService.writeFile(fileUri, VSBuffer.fromString(content));
-						await this.editorService.openEditor({ resource: fileUri });
+					// Dispatch as a create/overwrite file tool invocation
+					await this.toolsService.invokeTool(
+						{
+							callId: toolCallId,
+							toolId: OllamaCreateFileToolId,
+							parameters,
+							context: { sessionResource: request.sessionResource },
+						},
+						countTokens,
+						token,
+					);
 
-						progress([{
-							kind: 'progressMessage',
-							content: new MarkdownString(`Executed action: **${type}** \`${filePath}\``),
-						}]);
-					} else if (type === 'delete') {
-						await this.fileService.del(fileUri, { recursive: true });
-						progress([{
-							kind: 'progressMessage',
-							content: new MarkdownString(`Executed action: **delete** \`${filePath}\``),
-						}]);
-					}
+					// Signal completion to the UI
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: `${verb} file`,
+						isComplete: true
+					}]);
+				} else if (filePath && type === 'delete') {
+					const parameters = { filePath, rootUri: rootUri.toJSON() };
+
+					// Emit tool invocation progress to the chat UI
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Delete file',
+						isComplete: false,
+						invocationMessage: `Deleting ${filePath}...`
+					}]);
+
+					// Dispatch as a delete file tool invocation
+					await this.toolsService.invokeTool(
+						{
+							callId: toolCallId,
+							toolId: OllamaDeleteFileToolId,
+							parameters,
+							context: { sessionResource: request.sessionResource },
+						},
+						countTokens,
+						token,
+					);
+
+					// Signal completion to the UI
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Delete file',
+						isComplete: true
+					}]);
 				}
 			} catch (err) {
-				this._logService.error(`[Ollama] Failed to execute action ${type}: ${err}`);
+				this._logService.error(`[Ollama] Tool invocation failed for action ${type}: ${err}`);
 			}
 		}
 
 		return terminalOutputs;
-	}
-
-	/**
-	 * Get or create the reusable "Dark Matter Agent" terminal instance.
-	 * Searches by title to avoid creating duplicate terminal tabs.
-	 */
-	private async getOrCreateAgentTerminal(): Promise<ITerminalInstance> {
-		// First, try to find an existing "Dark Matter Agent" terminal by title
-		const existing = this.terminalService.instances.find(
-			i => i.title === 'Dark Matter Agent' || i.shellLaunchConfig?.name === 'Dark Matter Agent'
-		);
-		if (existing) {
-			this._agentTerminal = existing;
-			return existing;
-		}
-
-		// No existing terminal found — create a new one
-		const terminal = await this.terminalService.createTerminal({ config: { name: 'Dark Matter Agent' } });
-		this._agentTerminal = terminal;
-		return terminal;
-	}
-
-	/**
-	 * Capture terminal output after a command is sent.
-	 * Listens for data events and waits for silence or absolute timeout.
-	 */
-	private captureTerminalOutput(terminal: ITerminalInstance): Promise<string> {
-		return new Promise<string>(resolve => {
-			let output = '';
-			let silenceTimer: ReturnType<typeof setTimeout> | undefined;
-			const disposables = new DisposableStore();
-
-			const finish = () => {
-				if (silenceTimer) {
-					clearTimeout(silenceTimer);
-				}
-				disposables.dispose();
-				// Truncate to max length
-				const truncated = output.length > OllamaChatAgent.MAX_TERMINAL_OUTPUT
-					? output.substring(output.length - OllamaChatAgent.MAX_TERMINAL_OUTPUT)
-					: output;
-				resolve(truncated.trim());
-			};
-
-			// Listen for data from this specific terminal
-			disposables.add(this.terminalService.onAnyInstanceData(e => {
-				if (e.instance !== terminal) {
-					return;
-				}
-				output += e.data;
-
-				// Reset silence timer on each data event
-				if (silenceTimer) {
-					clearTimeout(silenceTimer);
-				}
-				silenceTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_SILENCE_TIMEOUT);
-			}));
-
-			// Absolute timeout to prevent waiting forever (e.g. for `ping` without -n)
-			const absoluteTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_ABSOLUTE_TIMEOUT);
-			disposables.add({ dispose: () => clearTimeout(absoluteTimer) });
-
-			// Start the silence timer immediately in case the command produces no output
-			silenceTimer = setTimeout(finish, OllamaChatAgent.TERMINAL_SILENCE_TIMEOUT);
-		});
 	}
 
 	// ========================================================================

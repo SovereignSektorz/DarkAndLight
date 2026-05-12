@@ -73,7 +73,7 @@ import { IUpdateService } from '../../../../platform/update/common/update.js';
 import { ActionWithDropdownActionViewItem, IActionWithDropdownActionViewItemOptions } from '../../../../base/browser/ui/dropdown/dropdownActionViewItem.js';
 import { IAuthenticationUsageService } from '../../../services/authentication/browser/authenticationUsageService.js';
 import { IExtensionGalleryManifestService } from '../../../../platform/extensionManagement/common/extensionGalleryManifest.js';
-import { IWorkbenchIssueService } from '../../issue/common/issue.js';
+
 import { IUserDataProfilesService } from '../../../../platform/userDataProfile/common/userDataProfile.js';
 
 export class PromptExtensionInstallFailureAction extends Action {
@@ -94,7 +94,6 @@ export class PromptExtensionInstallFailureAction extends Action {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IExtensionGalleryService private readonly galleryService: IExtensionGalleryService,
 		@IExtensionManifestPropertiesService private readonly extensionManifestPropertiesService: IExtensionManifestPropertiesService,
-		@IWorkbenchIssueService private readonly workbenchIssueService: IWorkbenchIssueService,
 	) {
 		super('extension.promptExtensionInstallFailure');
 	}
@@ -162,51 +161,21 @@ export class PromptExtensionInstallFailureAction extends Action {
 		}
 
 		if (ExtensionManagementErrorCode.SignatureVerificationFailed === (<ExtensionManagementErrorCode>this.error.name)) {
-			await this.dialogService.prompt({
-				type: 'error',
-				message: localize('verification failed', "Cannot install '{0}' extension because {1} cannot verify the extension signature", this.extension.displayName, this.productService.nameLong),
-				detail: getErrorMessage(this.error),
-				buttons: [{
-					label: localize('learn more', "Learn More"),
-					run: () => this.openerService.open('https://code.visualstudio.com/docs/editor/extension-marketplace#_the-extension-signature-cannot-be-verified-by-vs-code')
-				}, {
-					label: localize('install donot verify', "Install Anyway (Don't Verify Signature)"),
-					run: () => {
-						const installAction = this.instantiationService.createInstance(InstallAction, { ...this.options, donotVerifySignature: true, });
-						installAction.extension = this.extension;
-						return installAction.run();
-					}
-				}],
-				cancelButton: true
-			});
-			return;
+			// Dark Matter IDE cannot validate Microsoft's extension signatures.
+			// Auto-install with signature verification bypassed.
+			this.logService.info(`[DarkMatter] Bypassing signature check for '${this.extension.displayName}' (SignatureVerificationFailed)`);
+			const installAction = this.instantiationService.createInstance(InstallAction, { ...this.options, donotVerifySignature: true });
+			installAction.extension = this.extension;
+			return installAction.run();
 		}
 
 		if (ExtensionManagementErrorCode.SignatureVerificationInternal === (<ExtensionManagementErrorCode>this.error.name)) {
-			await this.dialogService.prompt({
-				type: 'error',
-				message: localize('verification failed', "Cannot install '{0}' extension because {1} cannot verify the extension signature", this.extension.displayName, this.productService.nameLong),
-				detail: getErrorMessage(this.error),
-				buttons: [{
-					label: localize('learn more', "Learn More"),
-					run: () => this.openerService.open('https://code.visualstudio.com/docs/editor/extension-marketplace#_the-extension-signature-cannot-be-verified-by-vs-code')
-				}, {
-					label: localize('report issue', "Report Issue"),
-					run: () => this.workbenchIssueService.openReporter({
-						issueTitle: localize('report issue title', "Extension Signature Verification Failed: {0}", this.extension.displayName),
-						issueBody: localize('report issue body', "Please include following log `F1 > Open View... > Shared` below.\n\n")
-					})
-				}, {
-					label: localize('install donot verify', "Install Anyway (Don't Verify Signature)"),
-					run: () => {
-						const installAction = this.instantiationService.createInstance(InstallAction, { ...this.options, donotVerifySignature: true, });
-						installAction.extension = this.extension;
-						return installAction.run();
-					}
-				}],
-				cancelButton: true
-			});
-			return;
+			// Dark Matter IDE cannot validate Microsoft's extension signatures.
+			// Auto-install with signature verification bypassed.
+			this.logService.info(`[DarkMatter] Bypassing signature check for '${this.extension.displayName}' (SignatureVerificationInternal)`);
+			const installAction = this.instantiationService.createInstance(InstallAction, { ...this.options, donotVerifySignature: true });
+			installAction.extension = this.extension;
+			return installAction.run();
 		}
 
 		const operationMessage = this.installOperation === InstallOperation.Update ? localize('update operation', "Error while updating '{0}' extension.", this.extension.displayName || this.extension.identifier.id)

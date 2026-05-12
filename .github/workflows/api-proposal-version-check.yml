@@ -3,7 +3,7 @@ name: API Proposal Version Check
 on:
   pull_request:
     branches:
-      - main
+      - master
       - 'release/*'
     paths:
       - 'src/vscode-dts/vscode.proposed.*.d.ts'

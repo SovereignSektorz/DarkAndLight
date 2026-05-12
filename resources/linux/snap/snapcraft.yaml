@@ -1,10 +1,9 @@
 name: @@NAME@@
 version: '@@VERSION@@'
-summary: Code editing. Redefined.
+summary: AI Coding Privacy. Redefined.
 description: |
-  Visual Studio Code is a new choice of tool that combines the
-  simplicity of a code editor with what developers need for the core
-  edit-build-debug cycle.
+  Dark Matter is a high-performance, open-source code editor based on the
+  VS Code platform, optimized for the modern development cycle.
 
 architectures:
   - build-on: amd64

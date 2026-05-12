@@ -197,13 +197,11 @@ export class WorkspaceChunkIndex extends Disposable {
 
 		try {
 			await this.progressService.withProgress({
-				location: ProgressLocation.Notification,
-				title: 'Dark Matter: Indexing Workspace',
-				cancellable: true,
+				location: ProgressLocation.Window,
+				title: 'Dark Matter: Indexing',
+				cancellable: false,
 			}, async (progress) => {
 				await this.buildIndex(progress, cts.token);
-			}, () => {
-				cts.cancel();
 			});
 		} catch (err) {
 			this._logService.error(`[ChunkIndex] Indexing failed: ${err}`);
