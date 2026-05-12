@@ -1,0 +1,13 @@
+{
+  "name": "localllm",
+  "publisher": "darkmatter",
+  "version": "1.0.0",
+  "displayName": "Local LLM Agent",
+  "description": "Built-in extension definition to satisfy extension host activation for the Local LLM chat agent.",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "*"
+  ]
+}

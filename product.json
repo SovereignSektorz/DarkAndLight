@@ -86,8 +86,8 @@
 		}
 	],
 	"defaultChatAgent": {
-		"extensionId": "",
-		"chatExtensionId": "",
+		"extensionId": "darkmatter.localllm",
+		"chatExtensionId": "darkmatter.localllm",
 		"chatExtensionOutputId": "",
 		"chatExtensionOutputExtensionStateCommand": "",
 		"documentationUrl": "",
