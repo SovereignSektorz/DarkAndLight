@@ -63,7 +63,7 @@ export class AgentMemory extends Disposable {
 		@ILoggerService private readonly loggerService: ILoggerService,
 	) {
 		super();
-		this._logService = this._register(this.loggerService.createLogger('ollama-memory', { name: 'Dark Matter Memory' }));
+		this._logService = this._register(this.loggerService.createLogger('localLLM-memory', { name: 'Dark Matter Memory' }));
 	}
 
 	// ========================================================================
@@ -75,7 +75,7 @@ export class AgentMemory extends Disposable {
 	 * Creates template files if they don't exist yet.
 	 */
 	public async load(): Promise<void> {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.persistentMemory.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.persistentMemory.enabled');
 		if (enabled === false) {
 			this._loaded = true;
 			return;
@@ -124,7 +124,7 @@ export class AgentMemory extends Disposable {
 	 * Build the system prompt section for persistent memory.
 	 */
 	public buildPromptSection(): string {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.persistentMemory.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.persistentMemory.enabled');
 		if (enabled === false || !this._loaded) {
 			return '';
 		}
@@ -227,7 +227,7 @@ export class AgentMemory extends Disposable {
 	 * Log an activity entry with timestamp.
 	 */
 	public async logActivity(message: string): Promise<void> {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.persistentMemory.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.persistentMemory.enabled');
 		if (enabled === false) { return; }
 
 		// If activity.log was deleted on disk while the IDE is running, reset the
@@ -264,7 +264,7 @@ export class AgentMemory extends Disposable {
 	 * Update a specific memory file.
 	 */
 	public async updateFile(file: 'task' | 'plan' | 'summary', content: string): Promise<void> {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.persistentMemory.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.persistentMemory.enabled');
 		if (enabled === false) { return; }
 
 		switch (file) {
@@ -301,7 +301,7 @@ export class AgentMemory extends Disposable {
 		agentResponse: string,
 		summarizer?: (text: string) => Promise<string>
 	): Promise<void> {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.persistentMemory.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.persistentMemory.enabled');
 		if (enabled === false) { return; }
 
 		const folder = this.getDarkmatterFolder();

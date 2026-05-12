@@ -17,7 +17,7 @@ import { ILifecycleService } from '../../../../services/lifecycle/common/lifecyc
 import { ChatAgentLocation, ChatModeKind } from '../../common/constants.js';
 import { IChatAgentData, IChatAgentHistoryEntry, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../common/participants/chatAgents.js';
 import { IChatFollowup, IChatProgress } from '../../common/chatService/chatService.js';
-import { OllamaChatMessage, OllamaLanguageModelProvider } from './ollamaLanguageModel.js';
+import { LLMChatMessage, LocalLLMProvider } from './localLLMProvider.js';
 import { IChatRequestVariableEntry, isImplicitVariableEntry } from '../../common/attachments/chatVariableEntries.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { ITextModel } from '../../../../../editor/common/model.js';
@@ -26,15 +26,15 @@ import { isLocation } from '../../../../../editor/common/languages.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 import { ILanguageModelToolsService, CountTokensCallback } from '../../common/tools/languageModelToolsService.js';
-import { OllamaCreateFileToolId, OllamaDeleteFileToolId, OllamaRunCommandToolId } from './ollamaTools.js';
+import { LocalLLMCreateFileToolId, LocalLLMDeleteFileToolId, LocalLLMRunCommandToolId } from './localLLMTools.js';
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
 import { hasKey } from '../../../../../base/common/types.js';
 
-const OLLAMA_AGENT_ID = 'ollama.local';
-const OLLAMA_AGENT_NAME = 'ollama';
-const OLLAMA_EXTENSION_ID = new ExtensionIdentifier('darkmatter.ollama');
+const LOCAL_LLM_AGENT_ID = 'localLLM.local';
+const LOCAL_LLM_AGENT_NAME = 'localLLM';
+const LOCAL_LLM_EXTENSION_ID = new ExtensionIdentifier('darkmatter.localllm');
 
 /** Directories to skip during workspace scanning */
 const IGNORED_DIRS = new Set([
@@ -75,7 +75,7 @@ const MAX_FILE_SIZE = 500 * 1024;
 /** Max total source content to collect (1.5MB) — matches 265k token context window */
 const MAX_TOTAL_SOURCE_SIZE = 1.5 * 1024 * 1024;
 
-export class OllamaChatAgent extends Disposable {
+export class LocalLLMChatAgent extends Disposable {
 	private readonly _logService: ILogger;
 
 	/** Cached workspace data (legacy fallback when smart context is disabled) */
@@ -119,7 +119,7 @@ export class OllamaChatAgent extends Disposable {
 				const path = (attrs.match(/path="([^"]*)"/) ?? [])[1];
 				const cmd = (attrs.match(/command="([^"]*)"/) ?? [])[1];
 				if (cmd) { return `[Ran command: ${cmd}]`; }
-				if (path) { return `[${OllamaChatAgent.actionLabel(type)}: ${path}]`; }
+				if (path) { return `[${LocalLLMChatAgent.actionLabel(type)}: ${path}]`; }
 				return `[${type} action]`;
 			}
 		);
@@ -129,7 +129,7 @@ export class OllamaChatAgent extends Disposable {
 			(_match, attrs: string) => {
 				const type = (attrs.match(/type="([^"]*)"/) ?? [])[1] ?? 'action';
 				const path = (attrs.match(/path="([^"]*)"/) ?? [])[1];
-				if (path) { return `[${OllamaChatAgent.actionLabel(type)}: ${path}]`; }
+				if (path) { return `[${LocalLLMChatAgent.actionLabel(type)}: ${path}]`; }
 				return `[${type} action]`;
 			}
 		);
@@ -154,7 +154,7 @@ export class OllamaChatAgent extends Disposable {
 	}
 
 	constructor(
-		private readonly ollamaProvider: OllamaLanguageModelProvider,
+		private readonly llmProvider: LocalLLMProvider,
 		private readonly _chunkIndex: WorkspaceChunkIndex,
 		private readonly _agentMemory: AgentMemory,
 		private readonly _conversationCompactor: ConversationCompactor,
@@ -169,23 +169,23 @@ export class OllamaChatAgent extends Disposable {
 	) {
 		super();
 
-		this._logService = this._register(this.loggerService.createLogger('ollama', { name: 'Dark Matter' }));
+		this._logService = this._register(this.loggerService.createLogger('local-llm', { name: 'Dark Matter' }));
 
 		// Purge GPU memory when workspace/window closes
 		this._register(this.lifecycleService.onWillShutdown(e => {
-			e.join(this.ollamaProvider.unloadModel(this.ollamaProvider.model), { id: 'darkmatter.unloadOllama', label: 'Purging AI Model from VRAM' });
+			e.join(this.llmProvider.unloadModel(this.llmProvider.model), { id: 'darkmatter.unloadLocalLLM', label: 'Purging AI Model from VRAM' });
 		}));
 
 		// Load persistent memory
 		this._agentMemory.load().catch(err => {
-			this._logService.warn(`[Ollama] Failed to load agent memory: ${err}`);
+			this._logService.warn(`[LocalLLM] Failed to load agent memory: ${err}`);
 		});
 
 		this.registerAgent();
 
 		// Kick off initial workspace scan asynchronously (legacy fallback)
 		this.scanWorkspace().catch(err => {
-			this._logService.warn(`[Ollama] Initial workspace scan failed: ${err}`);
+			this._logService.warn(`[LocalLLM] Initial workspace scan failed: ${err}`);
 		});
 	}
 
@@ -207,15 +207,15 @@ export class OllamaChatAgent extends Disposable {
 
 		for (const location of locations) {
 			const agentId = location === ChatAgentLocation.Chat
-				? OLLAMA_AGENT_ID
-				: `${OLLAMA_AGENT_ID}.${location}`;
+				? LOCAL_LLM_AGENT_ID
+				: `${LOCAL_LLM_AGENT_ID}.${location}`;
 
 			const agentData: IChatAgentData = {
 				id: agentId,
-				name: OLLAMA_AGENT_NAME,
-				fullName: 'Ollama Local AI',
-				description: 'AI assistant powered by your local Ollama server',
-				extensionId: OLLAMA_EXTENSION_ID,
+				name: LOCAL_LLM_AGENT_NAME,
+				fullName: 'Dark Matter Local AI',
+				description: 'AI assistant powered by your local LLM backend',
+				extensionId: LOCAL_LLM_EXTENSION_ID,
 				extensionVersion: '0.1.0',
 				extensionPublisherId: 'darkmatter',
 				extensionDisplayName: 'Dark Matter Ollama',
@@ -235,7 +235,7 @@ export class OllamaChatAgent extends Disposable {
 			disposables.add(this.chatAgentService.registerDynamicAgent(agentData, this.createImplementation()));
 		}
 
-		this._logService.info('[Dark Matter] Ollama chat agents registered for all locations');
+		this._logService.info('[Dark Matter] Local LLM chat agents registered for all locations');
 	}
 
 	private createImplementation(): IChatAgentImplementation {
@@ -279,7 +279,7 @@ export class OllamaChatAgent extends Disposable {
 			return;
 		}
 
-		this._logService.info('[Ollama] Scanning workspace and reading source files...');
+		this._logService.info('[LocalLLM] Scanning workspace and reading source files...');
 
 		const treeLines: string[] = [];
 		const sourceFiles: { path: string; content: string }[] = [];
@@ -297,7 +297,7 @@ export class OllamaChatAgent extends Disposable {
 				}
 			} catch (err) {
 				treeLines.push(`  ⚠️ Could not scan: ${err}`);
-				this._logService.error(`[Ollama] Workspace scan error: ${err}`);
+				this._logService.error(`[LocalLLM] Workspace scan error: ${err}`);
 			}
 		}
 
@@ -316,7 +316,7 @@ export class OllamaChatAgent extends Disposable {
 
 		this._lastScanTime = now;
 		this._logService.info(
-			`[Ollama] Scan complete: ${treeLines.length} tree entries, ` +
+			`[LocalLLM] Scan complete: ${treeLines.length} tree entries, ` +
 			`${sourceFiles.length} source files read (${Math.round(totalSourceSize / 1024)}KB total)`
 		);
 	}
@@ -414,7 +414,7 @@ export class OllamaChatAgent extends Disposable {
 	// ========================================================================
 
 	private async buildSystemPrompt(userMessage: string): Promise<string> {
-		const smartEnabled = this.configurationService.getValue<boolean>('ollamaAgent.smartContext.enabled') !== false;
+		const smartEnabled = this.configurationService.getValue<boolean>('localLLM.smartContext.enabled') !== false;
 
 		const parts: string[] = [
 			'You are a helpful AI coding assistant integrated directly into the Dark Matter IDE.',
@@ -545,25 +545,25 @@ export class OllamaChatAgent extends Disposable {
 		// Determine which model to use: picker selection > settings default
 		const selectedModel = request.userSelectedModelId || undefined;
 		const activeModelName = selectedModel
-			? (selectedModel.startsWith('ollama:') ? selectedModel.substring('ollama:'.length) : selectedModel)
-			: this.ollamaProvider.model;
-		this._logService.info(`[Ollama] Handling request with model "${activeModelName}": "${request.message.substring(0, 100)}"`);
+			? (selectedModel.includes(':') && selectedModel.indexOf(':') < 10 ? selectedModel.split(':').slice(1).join(':') : selectedModel)
+			: this.llmProvider.model;
+		this._logService.info(`[LocalLLM] Handling request with model "${activeModelName}": "${request.message.substring(0, 100)}"`);
 
-		const messages: OllamaChatMessage[] = [];
+		const messages: LLMChatMessage[] = [];
 
 		// System prompt — uses smart context (chunk index + memory) or legacy fallback
 		const systemPrompt = await this.buildSystemPrompt(request.message);
-		this._logService.info(`[Ollama] System prompt size: ${Math.round(systemPrompt.length / 1024)}KB`);
+		this._logService.info(`[LocalLLM] System prompt size: ${Math.round(systemPrompt.length / 1024)}KB`);
 		messages.push({ role: 'system', content: systemPrompt });
 
 		// Conversation history — use compactor if enabled
-		const maxContextWindow = this.configurationService.getValue<number>('ollamaAgent.maxContextWindow') || 131072;
+		const maxContextWindow = this.configurationService.getValue<number>('localLLM.maxContextWindow') || 131072;
 		const systemPromptTokens = Math.ceil(systemPrompt.length / 4);
 		const remainingAfterSystem = maxContextWindow - systemPromptTokens;
 		const responseBudget = Math.floor(maxContextWindow * 0.25); // 25% reserved for response generation
 		const historyBudget = Math.max(remainingAfterSystem - responseBudget, 2000);
 
-		this._logService.info(`[Ollama] Token budget: ctx=${maxContextWindow}, system=~${systemPromptTokens}, historyBudget=~${historyBudget}, responseBudget=~${responseBudget}`);
+		this._logService.info(`[LocalLLM] Token budget: ctx=${maxContextWindow}, system=~${systemPromptTokens}, historyBudget=~${historyBudget}, responseBudget=~${responseBudget}`);
 
 		const compacted = await this._conversationCompactor.compactHistory(history, Math.max(historyBudget, 2000), token);
 
@@ -577,7 +577,7 @@ export class OllamaChatAgent extends Disposable {
 				role: 'assistant',
 				content: 'Understood. I have the context from our earlier conversation.',
 			});
-			this._logService.info(`[Ollama] Compacted ${compacted.compactedTurnCount} turns into recap`);
+			this._logService.info(`[LocalLLM] Compacted ${compacted.compactedTurnCount} turns into recap`);
 		}
 
 		// Add recent messages (verbatim)
@@ -599,7 +599,7 @@ export class OllamaChatAgent extends Disposable {
 						contextParts.push(content);
 					}
 				} catch (err) {
-					this._logService.warn(`[Ollama] Failed to resolve variable ${variable.name}: ${err}`);
+					this._logService.warn(`[LocalLLM] Failed to resolve variable ${variable.name}: ${err}`);
 				}
 			}
 		}
@@ -632,10 +632,10 @@ export class OllamaChatAgent extends Disposable {
 			let fullResponse = '';
 
 			// Helper reference for file action stripping
-			const stripFileActionTags = OllamaChatAgent.stripFileActionTags;
+			const stripFileActionTags = LocalLLMChatAgent.stripFileActionTags;
 
 			// Stream the response in real-time, suppressing <thought> and <file_action> tags
-			for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
 				if (token.isCancellationRequested) {
 					break;
 				}
@@ -643,7 +643,7 @@ export class OllamaChatAgent extends Disposable {
 				currentBuffer += chunk;
 				fullResponse += chunk;
 
-				this._logService.trace(`[Ollama Agent] Received chunk: ${JSON.stringify(chunk)}`);
+				this._logService.trace(`[LocalLLM Agent] Received chunk: ${JSON.stringify(chunk)}`);
 
 				// Process currentBuffer for <thought> and <file_action> tags
 				while (currentBuffer.length > 0) {
@@ -695,14 +695,14 @@ export class OllamaChatAgent extends Disposable {
 						const endIdx = lowerBuffer.indexOf('</thought>');
 						if (endIdx !== -1) {
 							if (endIdx > 0) {
-								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, endIdx)}`);
+								this._logService.debug(`[LocalLLM Thought] ${currentBuffer.substring(0, endIdx)}`);
 							}
 							inThought = false;
 							currentBuffer = currentBuffer.substring(endIdx + '</thought>'.length);
 						} else {
 							const safeLength = Math.max(0, currentBuffer.length - 11);
 							if (safeLength > 0) {
-								this._logService.debug(`[Ollama Thought] ${currentBuffer.substring(0, safeLength)}`);
+								this._logService.debug(`[LocalLLM Thought] ${currentBuffer.substring(0, safeLength)}`);
 								currentBuffer = currentBuffer.substring(safeLength);
 							}
 							break;
@@ -714,7 +714,7 @@ export class OllamaChatAgent extends Disposable {
 			// Flush remaining buffer
 			if (currentBuffer.length > 0) {
 				if (inThought) {
-					this._logService.debug(`[Ollama Thought] ${currentBuffer}`);
+					this._logService.debug(`[LocalLLM Thought] ${currentBuffer}`);
 				} else {
 					const cleaned = stripFileActionTags(currentBuffer);
 					if (cleaned.length > 0) {
@@ -723,7 +723,7 @@ export class OllamaChatAgent extends Disposable {
 				}
 			}
 
-			this._logService.info(`[Ollama] Request completed, response length: ${totalLength}`);
+			this._logService.info(`[LocalLLM] Request completed, response length: ${totalLength}`);
 
 			// Parse model-initiated memory updates (explicit code blocks in response)
 			const taskMatch = fullResponse.match(/```task\n([\s\S]*?)```/);
@@ -743,10 +743,10 @@ export class OllamaChatAgent extends Disposable {
 			// Use summarizeResponseForMemory so file contents are replaced with compact
 			// descriptions (e.g. "[Created file: path]") rather than raw code that would
 			// confuse the model into thinking files are already in context.
-			const responseSummary = OllamaChatAgent.summarizeResponseForMemory(fullResponse);
+			const responseSummary = LocalLLMChatAgent.summarizeResponseForMemory(fullResponse);
 			this._agentMemory.logActivity(`[Agent] ${responseSummary}`).catch(() => { });
 
-			// Build a lightweight summarizer callback backed by the current Ollama model.
+			// Build a lightweight summarizer callback backed by the current local LLM model.
 			// Used by AgentMemory when the summary file exceeds the size limit.
 			const summarizer = async (prompt: string): Promise<string> => {
 				const chunks: string[] = [];
@@ -754,7 +754,7 @@ export class OllamaChatAgent extends Disposable {
 					{ role: 'system' as const, content: 'You are a concise summarizer. Respond with plain prose only — no markdown, no headings, no bullet points.' },
 					{ role: 'user' as const, content: prompt },
 				];
-				for await (const chunk of this.ollamaProvider.sendChatRequest(summaryMessages, token, selectedModel)) {
+				for await (const chunk of this.llmProvider.sendChatRequest(summaryMessages, token, selectedModel)) {
 					chunks.push(chunk);
 				}
 				return chunks.join('');
@@ -767,7 +767,7 @@ export class OllamaChatAgent extends Disposable {
 			let depth = 0;
 			let responseToProcess = fullResponse;
 
-			while (depth < OllamaChatAgent.MAX_AGENT_LOOP_DEPTH) {
+			while (depth < LocalLLMChatAgent.MAX_AGENT_LOOP_DEPTH) {
 				const terminalOutputs = await this.executeAgentActions(responseToProcess, request, progress, token);
 
 				if (terminalOutputs.length === 0) {
@@ -775,7 +775,7 @@ export class OllamaChatAgent extends Disposable {
 				}
 
 				depth++;
-				this._logService.info(`[Ollama] Agentic follow-up loop iteration ${depth}`);
+				this._logService.info(`[LocalLLM] Agentic follow-up loop iteration ${depth}`);
 
 				const outputContext = terminalOutputs.map(t =>
 					`Command: \`${t.command}\`\n<terminal_output>\n${t.output}\n</terminal_output>`
@@ -790,7 +790,7 @@ export class OllamaChatAgent extends Disposable {
 				progress([{ kind: 'progressMessage', content: new MarkdownString('Analyzing terminal output...') }]);
 
 				let followUpResponse = '';
-				for await (const chunk of this.ollamaProvider.sendChatRequest(messages, token, selectedModel)) {
+				for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
 					if (token.isCancellationRequested) { break; }
 					followUpResponse += chunk;
 					const cleaned = stripFileActionTags(chunk);
@@ -810,11 +810,11 @@ export class OllamaChatAgent extends Disposable {
 				return {}; // Standard cancellation, no error message needed
 			}
 			const errorMessage = error instanceof Error ? error.message : String(error);
-			this._logService.error(`[Ollama] Request failed: ${errorMessage}`);
+			this._logService.error(`[LocalLLM] Request failed: ${errorMessage}`);
 
 			return {
 				errorDetails: {
-					message: `Ollama error: ${errorMessage}. Make sure Ollama is running at ${this.ollamaProvider.baseUrl}`,
+					message: `Local LLM error: ${errorMessage}. Make sure your local AI backend is running at ${this.llmProvider.baseUrl}`,
 				},
 			};
 		}
@@ -857,7 +857,7 @@ export class OllamaChatAgent extends Disposable {
 			const content = match[4] || '';
 
 			try {
-				const toolCallId = `ollama-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+				const toolCallId = `localLLM-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
 				if (type === 'runCommand' && command) {
 					// Emit tool invocation progress to the chat UI
@@ -873,7 +873,7 @@ export class OllamaChatAgent extends Disposable {
 					const result = await this.toolsService.invokeTool(
 						{
 							callId: toolCallId,
-							toolId: OllamaRunCommandToolId,
+							toolId: LocalLLMRunCommandToolId,
 							parameters: { command },
 							context: { sessionResource: request.sessionResource },
 						},
@@ -915,7 +915,7 @@ export class OllamaChatAgent extends Disposable {
 					await this.toolsService.invokeTool(
 						{
 							callId: toolCallId,
-							toolId: OllamaCreateFileToolId,
+							toolId: LocalLLMCreateFileToolId,
 							parameters,
 							context: { sessionResource: request.sessionResource },
 						},
@@ -946,7 +946,7 @@ export class OllamaChatAgent extends Disposable {
 					await this.toolsService.invokeTool(
 						{
 							callId: toolCallId,
-							toolId: OllamaDeleteFileToolId,
+							toolId: LocalLLMDeleteFileToolId,
 							parameters,
 							context: { sessionResource: request.sessionResource },
 						},
@@ -963,7 +963,7 @@ export class OllamaChatAgent extends Disposable {
 					}]);
 				}
 			} catch (err) {
-				this._logService.error(`[Ollama] Tool invocation failed for action ${type}: ${err}`);
+				this._logService.error(`[LocalLLM] Tool invocation failed for action ${type}: ${err}`);
 			}
 		}
 

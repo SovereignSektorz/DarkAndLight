@@ -453,9 +453,9 @@ export class ChatService extends Disposable implements IChatService {
 
 		const defaultAgentData = this.chatAgentService.getContributedDefaultAgent(location) ?? this.chatAgentService.getContributedDefaultAgent(ChatAgentLocation.Chat);
 		if (!defaultAgentData) {
-			// Dark Matter: In local Ollama mode, no extension contributes a default agent.
-			// The Ollama agent registers directly via a workbench contribution.
-			this.logService.info('[Dark Matter] No extension-contributed default agent — using core-registered Ollama agent.');
+			// Dark Matter: In local LLM mode, no extension contributes a default agent.
+			// The Local LLM agent registers directly via a workbench contribution.
+			this.logService.info('[Dark Matter] No extension-contributed default agent — using core-registered Local LLM agent.');
 			return;
 		}
 

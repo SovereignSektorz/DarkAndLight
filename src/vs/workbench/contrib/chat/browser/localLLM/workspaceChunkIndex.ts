@@ -12,7 +12,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
 import { IProgressService, ProgressLocation } from '../../../../../platform/progress/common/progress.js';
-import { OllamaChatMessage, OllamaLanguageModelProvider } from './ollamaLanguageModel.js';
+import { LLMChatMessage, LocalLLMProvider } from './localLLMProvider.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 
 /** Directories to skip during workspace scanning */
@@ -76,7 +76,7 @@ export class WorkspaceChunkIndex extends Disposable {
 	private readonly _fileWatcherDisposables = this._register(new DisposableStore());
 
 	constructor(
-		private readonly ollamaProvider: OllamaLanguageModelProvider,
+		private readonly llmProvider: LocalLLMProvider,
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -84,7 +84,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		@IProgressService private readonly progressService: IProgressService,
 	) {
 		super();
-		this._logService = this._register(this.loggerService.createLogger('ollama-index', { name: 'Dark Matter Index' }));
+		this._logService = this._register(this.loggerService.createLogger('localLLM-index', { name: 'Dark Matter Index' }));
 
 		// Load existing index from disk
 		this.loadIndex().then(() => {
@@ -100,8 +100,8 @@ export class WorkspaceChunkIndex extends Disposable {
 
 		// React to strategy config changes
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('ollamaAgent.smartContext.reindexStrategy') ||
-				e.affectsConfiguration('ollamaAgent.smartContext.reindexIntervalSeconds')) {
+			if (e.affectsConfiguration('localLLM.smartContext.reindexStrategy') ||
+				e.affectsConfiguration('localLLM.smartContext.reindexIntervalSeconds')) {
 				this.setupReindexStrategy();
 			}
 		}));
@@ -119,7 +119,7 @@ export class WorkspaceChunkIndex extends Disposable {
 			this._intervalHandle = undefined;
 		}
 
-		const strategy = this.configurationService.getValue<string>('ollamaAgent.smartContext.reindexStrategy') || 'fileWatcher';
+		const strategy = this.configurationService.getValue<string>('localLLM.smartContext.reindexStrategy') || 'fileWatcher';
 
 		if (strategy === 'fileWatcher') {
 			this.setupFileWatcher();
@@ -166,7 +166,7 @@ export class WorkspaceChunkIndex extends Disposable {
 	}
 
 	private setupIntervalReindex(): void {
-		const intervalSec = this.configurationService.getValue<number>('ollamaAgent.smartContext.reindexIntervalSeconds') || 120;
+		const intervalSec = this.configurationService.getValue<number>('localLLM.smartContext.reindexIntervalSeconds') || 120;
 		this._intervalHandle = mainWindow.setInterval(() => {
 			this.runFullIndex();
 		}, intervalSec * 1000);
@@ -182,7 +182,7 @@ export class WorkspaceChunkIndex extends Disposable {
 			return;
 		}
 
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.smartContext.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.smartContext.enabled');
 		if (enabled === false) {
 			return;
 		}
@@ -360,7 +360,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		content: string,
 		token: CancellationToken
 	): Promise<{ summary: string; keyExports: string[]; dependencies: string[] } | undefined> {
-		const prompt: OllamaChatMessage[] = [
+		const prompt: LLMChatMessage[] = [
 			{
 				role: 'system',
 				content: 'You are a code indexer. Given a source file, respond with a JSON object containing: ' +
@@ -377,7 +377,7 @@ export class WorkspaceChunkIndex extends Disposable {
 
 		let result = '';
 		try {
-			for await (const chunk of this.ollamaProvider.sendChatRequest(prompt, token)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
 				result += chunk;
 				if (token.isCancellationRequested) { return undefined; }
 			}
@@ -423,7 +423,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		}
 
 		// For larger workspaces, ask the model to synthesize an overview
-		const prompt: OllamaChatMessage[] = [
+		const prompt: LLMChatMessage[] = [
 			{
 				role: 'system',
 				content: 'You are a technical architect. Given a list of file summaries from a project, write a concise project overview (5-10 sentences) covering: the project type, main technologies, architecture patterns, and key modules.',
@@ -436,7 +436,7 @@ export class WorkspaceChunkIndex extends Disposable {
 
 		let result = '';
 		try {
-			for await (const chunk of this.ollamaProvider.sendChatRequest(prompt, token)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
 				result += chunk;
 				if (token.isCancellationRequested) { return; }
 			}
@@ -451,7 +451,7 @@ export class WorkspaceChunkIndex extends Disposable {
 	// ========================================================================
 
 	public getRelevantContext(context: RelevanceContext): { overview: string; relevantFiles: FileIndexEntry[] } {
-		const maxFiles = this.configurationService.getValue<number>('ollamaAgent.smartContext.maxRelevantFiles') || 15;
+		const maxFiles = this.configurationService.getValue<number>('localLLM.smartContext.maxRelevantFiles') || 15;
 
 		const scored: { entry: FileIndexEntry; score: number }[] = [];
 

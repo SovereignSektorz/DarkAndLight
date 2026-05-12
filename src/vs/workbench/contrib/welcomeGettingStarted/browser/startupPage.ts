@@ -238,7 +238,7 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 	// 		return; // onboarding already completed
 	// 	}
 	//
-	// 	// Show the Dark Matter Ollama setup overlay
+	// 	// Show the Dark Matter Local LLM setup overlay
 	// 	this.onboardingService.show();
 	//
 	// 	// Mark onboarding as completed when dismissed

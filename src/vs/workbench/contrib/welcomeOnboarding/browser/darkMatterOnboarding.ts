@@ -44,8 +44,8 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 		@ILogService private readonly logService: ILogService,
 	) {
 		super();
-		this.serverUrl = this.configurationService.getValue<string>('ollamaAgent.baseUrl') || 'http://127.0.0.1:11434';
-		this.selectedModel = this.configurationService.getValue<string>('ollamaAgent.model') || 'llama3.1';
+		this.serverUrl = this.configurationService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
+		this.selectedModel = this.configurationService.getValue<string>('localLLM.model') || 'llama3.1';
 	}
 
 	show(): void {
@@ -233,12 +233,15 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 		const title = append(header, $('h2.dm-onboard-title'));
 		title.textContent = 'Welcome to Dark Matter';
 		const subtitle = append(header, $('p.dm-onboard-subtitle'));
-		subtitle.innerHTML = 'Your AI-powered code editor.<br>Let\u2019s connect to your local Ollama server to enable AI features.';
+		subtitle.innerHTML = 'Your AI-powered code editor.<br>Let\u2019s connect to your local AI server to enable AI features.';
 
 		const body = append(this.card!, $('div.dm-onboard-body'));
 		const features = [
-			{ icon: '🤖', text: 'Built-in AI chat powered by Ollama' },
+			// allow-any-unicode-next-line
+			{ icon: '🤖', text: 'Built-in AI chat powered by local LLM' },
+			// allow-any-unicode-next-line
 			{ icon: '🔒', text: '100% local — your code never leaves your machine' },
+			// allow-any-unicode-next-line
 			{ icon: '⚡', text: 'Any model: Gemma, Llama, Mistral, DeepSeek...' },
 		];
 		for (const f of features) {
@@ -279,9 +282,9 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 	private _renderServerStep(): void {
 		const header = append(this.card!, $('div.dm-onboard-header'));
 		const title = append(header, $('h2.dm-onboard-title'));
-		title.textContent = 'Connect to Ollama';
+		title.textContent = 'Connect to Local AI';
 		const subtitle = append(header, $('p.dm-onboard-subtitle'));
-		subtitle.textContent = 'Enter the URL of your Ollama server. If running locally, the default works out of the box.';
+		subtitle.textContent = 'Enter the URL of your local AI server. If running locally, the default works out of the box.';
 
 		const body = append(this.card!, $('div.dm-onboard-body'));
 		const label = append(body, $('div.dm-onboard-label'));
@@ -313,7 +316,7 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 			try {
 				new URL(url);
 			} catch {
-				status.textContent = '✗ Invalid URL format';
+				status.textContent = '[x] Invalid URL format';
 				status.className = 'dm-onboard-status error';
 				return;
 			}
@@ -331,7 +334,7 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 					status.textContent = `\u2713 Connected! Found ${this.models.length} model(s)`;
 					status.className = 'dm-onboard-status success';
 
-					await this.configurationService.updateValue('ollamaAgent.baseUrl', url);
+					await this.configurationService.updateValue('localLLM.baseUrl', url);
 
 					// Auto-advance after brief delay
 					setTimeout(() => {
@@ -339,11 +342,11 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 						this._renderStep();
 					}, 800);
 				} else {
-					status.textContent = '✗ Server responded with an error';
+					status.textContent = '[x] Server responded with an error';
 					status.className = 'dm-onboard-status error';
 				}
 			} catch {
-				status.textContent = '✗ Could not connect. Is Ollama running?';
+				status.textContent = '[x] Could not connect. Is your local AI server running?';
 				status.className = 'dm-onboard-status error';
 			}
 			testBtn.disabled = false;
@@ -385,7 +388,7 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 
 		if (this.models.length === 0) {
 			const empty = append(body, $('div.dm-onboard-status'));
-			empty.textContent = 'No models found. Run: ollama pull gemma3:4b';
+			empty.textContent = 'No models found. Check your server URL and ensure models are loaded.';
 			empty.className = 'dm-onboard-status';
 		}
 
@@ -403,7 +406,7 @@ export class DarkMatterOnboarding extends Disposable implements IOnboardingServi
 		nextBtn.type = 'button';
 		this.disposables.add(addDisposableListener(nextBtn, EventType.CLICK, async () => {
 			if (this.selectedModel) {
-				await this.configurationService.updateValue('ollamaAgent.model', this.selectedModel);
+				await this.configurationService.updateValue('localLLM.model', this.selectedModel);
 			}
 			this.currentStep = 3;
 			this._renderStep();

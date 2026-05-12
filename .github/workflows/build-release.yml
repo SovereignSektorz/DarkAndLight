@@ -182,18 +182,18 @@ jobs:
           body: |
             ## Dark Matter IDE ${{ github.ref_name }}
 
-            **AI-Powered Code Editor with Built-in Ollama Integration**
+            **AI-Powered Code Editor with Built-in Local LLM Integration**
 
             ### Downloads
             - 🪟 **Windows**: `DarkMatter-win32-x64.zip` — Extract and run `Dark Matter.exe`
             - 🐧 **Linux**: `DarkMatter-linux-x64.tar.gz` — Extract and run `./dark-matter`
 
             ### Prerequisites
-            - Install [Ollama](https://ollama.com/download) and pull a model: `ollama pull gemma3:4b`
+            - Run a local LLM backend (e.g. Ollama, llama-server, LM Studio) and pull a model
             - Launch Dark Matter and start chatting with AI!
 
             ### What's New
-            - Built-in Ollama AI chat agent
+            - Built-in Local AI chat agent with multi-backend support
             - Custom Dark Matter welcome page
             - Privacy-first: all AI runs locally on your hardware
 

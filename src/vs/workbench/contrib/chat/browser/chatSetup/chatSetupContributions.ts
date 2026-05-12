@@ -86,8 +86,8 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 	) {
 		super();
 
-		// Dark Matter: When no provider extension is configured (local Ollama mode),
-		// skip the entire chat setup machinery. The Ollama agent registers directly.
+		// Dark Matter: When no provider extension is configured (local LLM mode),
+		// skip the entire chat setup machinery. The Local LLM agent registers directly.
 		if (!product.defaultChatAgent?.providerExtensionId) {
 			const context = chatEntitlementService.context?.value;
 			if (context) {
@@ -635,9 +635,7 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
 			const found = this.extensionService.extensions.find(
 				ext => ExtensionIdentifier.equals(ext.identifier, defaultChat.chatExtensionId)
 			);
-			console.log("[DEBUG] Looking for chatExtensionId:", defaultChat.chatExtensionId);
-			console.log("[DEBUG] Found?", !!found);
-			console.log("[DEBUG] All extension IDs containing 'local' or 'ollama' or 'darkmatter':", this.extensionService.extensions.filter(e => /local|ollama|darkmatter/i.test(e.identifier.value)).map(e => e.identifier.value));
+
 			context.update({ installed: !!found, disabled: false, untrusted: false, disabledInWorkspace: false });
 			return;
 		}

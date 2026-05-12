@@ -11,20 +11,20 @@ import { ILogService } from '../../../../../platform/log/common/log.js';
 import { Action2, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../../platform/instantiation/common/instantiation.js';
 import { localize2 } from '../../../../../nls.js';
-import { OllamaLanguageModelProvider } from './ollamaLanguageModel.js';
+import { LocalLLMProvider } from './localLLMProvider.js';
 
-const CONFIGURE_OLLAMA_CMD = 'workbench.action.configureOllama';
+const CONFIGURE_LOCAL_LLM_CMD = 'workbench.action.configureLocalLLM';
 
 /**
- * Command that opens the Ollama quick-pick configuration dialog.
+ * Command that opens the Local LLM quick-pick configuration dialog.
  */
-class ConfigureOllamaAction extends Action2 {
-	static readonly ID = CONFIGURE_OLLAMA_CMD;
+class ConfigureLocalLLMAction extends Action2 {
+	static readonly ID = CONFIGURE_LOCAL_LLM_CMD;
 
 	constructor() {
 		super({
-			id: ConfigureOllamaAction.ID,
-			title: localize2('configureOllama', "Configure AI Server"),
+			id: ConfigureLocalLLMAction.ID,
+			title: localize2('configureLocalLLM', "Configure AI Server"),
 			f1: true,
 			category: localize2('ai', "AI"),
 		});
@@ -35,11 +35,11 @@ class ConfigureOllamaAction extends Action2 {
 		const configService = accessor.get(IConfigurationService);
 		const logService = accessor.get(ILogService);
 
-		const currentUrl = configService.getValue<string>('ollamaAgent.baseUrl') || 'http://127.0.0.1:11434';
-		const currentModel = configService.getValue<string>('ollamaAgent.model') || 'llama3.1';
-		const currentContext = configService.getValue<number>('ollamaAgent.maxContextWindow') || 131072;
+		const currentUrl = configService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
+		const currentModel = configService.getValue<string>('localLLM.model') || 'llama3.1';
+		const currentContext = configService.getValue<number>('localLLM.maxContextWindow') || 131072;
 
-		const smartContextEnabled = configService.getValue<boolean>('ollamaAgent.smartContext.enabled') !== false;
+		const smartContextEnabled = configService.getValue<boolean>('localLLM.smartContext.enabled') !== false;
 
 		// Step 1: Pick what to configure
 		const options: IQuickPickItem[] = [
@@ -47,7 +47,7 @@ class ConfigureOllamaAction extends Action2 {
 				id: 'url',
 				label: '$(globe) Server URL',
 				description: currentUrl,
-				detail: 'Change the Ollama API server address',
+				detail: 'Change the AI server address',
 			},
 			{
 				id: 'model',
@@ -76,7 +76,7 @@ class ConfigureOllamaAction extends Action2 {
 			{
 				id: 'test',
 				label: '$(debug-start) Test Connection',
-				detail: 'Verify the Ollama server is reachable',
+				detail: 'Verify the AI server is reachable',
 			},
 		];
 
@@ -92,9 +92,9 @@ class ConfigureOllamaAction extends Action2 {
 		if (picked.id === 'url') {
 			// URL input
 			const newUrl = await quickInputService.input({
-				title: 'Ollama Server URL',
+				title: 'Local LLM Server URL',
 				value: currentUrl,
-				prompt: 'Enter the base URL of your Ollama server (e.g., http://192.168.1.100:11434)',
+				prompt: 'Enter the base URL of your local LLM server (e.g., http://192.168.1.100:11434)',
 				validateInput: async (value) => {
 					try {
 						new URL(value);
@@ -106,38 +106,46 @@ class ConfigureOllamaAction extends Action2 {
 			});
 
 			if (newUrl && newUrl !== currentUrl) {
-				await configService.updateValue('ollamaAgent.baseUrl', newUrl);
-				logService.info(`[Dark Matter] Ollama server URL updated to: ${newUrl}`);
+				await configService.updateValue('localLLM.baseUrl', newUrl);
+				logService.info(`[Dark Matter] AI server URL updated to: ${newUrl}`);
 			}
 
 		} else if (picked.id === 'model') {
 			// Fetch models from server and let user pick
-			const baseUrl = configService.getValue<string>('ollamaAgent.baseUrl') || 'http://127.0.0.1:11434';
+			const baseUrl = configService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
 
-			let models: { name: string; size: number }[] = [];
+			let modelNames: string[] = [];
 			try {
-				const response = await fetch(`${baseUrl}/api/tags`);
-				if (response.ok) {
-					const data = await response.json();
-					models = data.models || [];
+				// Try OpenAI-compatible endpoint first
+				const r1 = await fetch(`${baseUrl}/v1/models`);
+				if (r1.ok) {
+					const data = await r1.json();
+					modelNames = (data.data ?? []).map((m: { id: string }) => m.id);
+				}
+				// Legacy Ollama fallback — try /api/tags if /v1/models returns empty
+				if (modelNames.length === 0) {
+					const r2 = await fetch(`${baseUrl}/api/tags`);
+					if (r2.ok) {
+						const data = await r2.json();
+						modelNames = (data.models ?? []).map((m: { name: string }) => m.name);
+					}
 				}
 			} catch {
 				// connection failed
 			}
 
-			if (models.length === 0) {
+			if (modelNames.length === 0) {
 				await quickInputService.pick(
-					[{ label: '$(warning) Could not connect to Ollama server', description: baseUrl }],
+					[{ label: '$(warning) Could not connect to LLM backend', description: baseUrl }],
 					{ title: 'No Models Found' }
 				);
 				return;
 			}
 
-			const modelItems: IQuickPickItem[] = models.map(m => ({
-				id: m.name,
-				label: m.name === currentModel ? `$(check) ${m.name}` : `     ${m.name}`,
-				description: m.name === currentModel ? 'current default' : '',
-				detail: `Size: ${(m.size / (1024 * 1024 * 1024)).toFixed(1)} GB`,
+			const modelItems: IQuickPickItem[] = modelNames.map(name => ({
+				id: name,
+				label: name === currentModel ? `$(check) ${name}` : `     ${name}`,
+				description: name === currentModel ? 'current default' : '',
 			}));
 
 			const selectedModel = await quickInputService.pick(modelItems, {
@@ -146,7 +154,7 @@ class ConfigureOllamaAction extends Action2 {
 			});
 
 			if (selectedModel?.id && selectedModel.id !== currentModel) {
-				await configService.updateValue('ollamaAgent.model', selectedModel.id);
+				await configService.updateValue('localLLM.model', selectedModel.id);
 				logService.info(`[Dark Matter] Default model updated to: ${selectedModel.id}`);
 			}
 
@@ -168,7 +176,7 @@ class ConfigureOllamaAction extends Action2 {
 			if (newContextStr) {
 				const newContext = parseInt(newContextStr);
 				if (newContext !== currentContext) {
-					await configService.updateValue('ollamaAgent.maxContextWindow', newContext);
+					await configService.updateValue('localLLM.maxContextWindow', newContext);
 					logService.info(`[Dark Matter] Max context window updated to: ${newContext}`);
 				}
 			}
@@ -176,24 +184,24 @@ class ConfigureOllamaAction extends Action2 {
 		} else if (picked.id === 'smartContext') {
 			// Toggle smart context
 			const newValue = !smartContextEnabled;
-			await configService.updateValue('ollamaAgent.smartContext.enabled', newValue);
+			await configService.updateValue('localLLM.smartContext.enabled', newValue);
 			logService.info(`[Dark Matter] Smart context ${newValue ? 'enabled' : 'disabled'}`);
 
 		} else if (picked.id === 'rebuildIndex') {
 			// Trigger workspace re-index via internal command
 			logService.info('[Dark Matter] Manual workspace re-index requested');
-			await configService.updateValue('ollamaAgent.smartContext.enabled', true);
+			await configService.updateValue('localLLM.smartContext.enabled', true);
 			// The WorkspaceChunkIndex will pick up the change and re-index
 
 		} else if (picked.id === 'test') {
 			// Test connection
-			const baseUrl = configService.getValue<string>('ollamaAgent.baseUrl') || 'http://127.0.0.1:11434';
+			const baseUrl = configService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
 
 			try {
-				const response = await fetch(`${baseUrl}/api/tags`);
+				const response = await fetch(`${baseUrl}/v1/models`);
 				if (response.ok) {
 					const data = await response.json();
-					const modelCount = data.models?.length || 0;
+					const modelCount = (data.data ?? data.models ?? []).length;
 					await quickInputService.pick(
 						[{
 							label: `$(check) Connected to ${baseUrl}`,
@@ -222,19 +230,19 @@ class ConfigureOllamaAction extends Action2 {
 }
 
 // Register the command
-registerAction2(ConfigureOllamaAction);
+registerAction2(ConfigureLocalLLMAction);
 
 /**
  * Status bar entry showing current AI server status with quick config access.
  */
-export class OllamaStatusBarEntry extends Disposable {
+export class LocalLLMStatusBarEntry extends Disposable {
 
-	static readonly ID = 'workbench.contrib.ollamaStatusBar';
+	static readonly ID = 'workbench.contrib.localLLMStatusBar';
 
 	private entry: IStatusbarEntryAccessor | undefined;
 
 	constructor(
-		ollamaProvider: OllamaLanguageModelProvider,
+		llmProvider: LocalLLMProvider,
 		@IStatusbarService private readonly statusbarService: IStatusbarService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
@@ -243,20 +251,20 @@ export class OllamaStatusBarEntry extends Disposable {
 		this.updateEntry();
 
 		// Re-render when settings change
-		this._register(ollamaProvider.onDidChange(() => this.updateEntry()));
+		this._register(llmProvider.onDidChange(() => this.updateEntry()));
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
-			if (e.affectsConfiguration('ollamaAgent.baseUrl') || e.affectsConfiguration('ollamaAgent.model')) {
+			if (e.affectsConfiguration('localLLM.baseUrl') || e.affectsConfiguration('localLLM.model')) {
 				this.updateEntry();
 			}
 		}));
 
 		// Check connection status on startup
-		this.checkAndUpdate(ollamaProvider);
+		this.checkAndUpdate(llmProvider);
 	}
 
 	private connected = false;
 
-	private async checkAndUpdate(provider: OllamaLanguageModelProvider): Promise<void> {
+	private async checkAndUpdate(provider: LocalLLMProvider): Promise<void> {
 		this.connected = await provider.checkConnection();
 		this.updateEntry();
 	}
@@ -272,7 +280,7 @@ export class OllamaStatusBarEntry extends Disposable {
 			text: statusText,
 			ariaLabel: tooltip,
 			tooltip,
-			command: CONFIGURE_OLLAMA_CMD,
+			command: CONFIGURE_LOCAL_LLM_CMD,
 			showInAllWindows: true,
 		};
 
@@ -284,7 +292,7 @@ export class OllamaStatusBarEntry extends Disposable {
 			// We use a very low number to be just left of it
 			this.entry = this.statusbarService.addEntry(
 				props,
-				'ollama.statusBar',
+				'localLLM.statusBar',
 				StatusbarAlignment.RIGHT,
 				-Number.MAX_SAFE_INTEGER + 1 // just left of notification bell
 			);

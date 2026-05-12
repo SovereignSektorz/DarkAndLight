@@ -7,7 +7,7 @@ import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ILogger, ILoggerService } from '../../../../../platform/log/common/log.js';
-import { OllamaChatMessage, OllamaLanguageModelProvider } from './ollamaLanguageModel.js';
+import { LLMChatMessage, LocalLLMProvider } from './localLLMProvider.js';
 import { IChatAgentHistoryEntry } from '../../common/participants/chatAgents.js';
 
 export interface CompactedHistory {
@@ -16,7 +16,7 @@ export interface CompactedHistory {
 	/** Number of turns that were compacted into the recap */
 	compactedTurnCount: number;
 	/** Recent turns kept verbatim as message pairs */
-	recentMessages: OllamaChatMessage[];
+	recentMessages: LLMChatMessage[];
 }
 
 export class ConversationCompactor extends Disposable {
@@ -28,12 +28,12 @@ export class ConversationCompactor extends Disposable {
 	private _cachedRecapTurnCount: number = 0;
 
 	constructor(
-		private readonly ollamaProvider: OllamaLanguageModelProvider,
+		private readonly llmProvider: LocalLLMProvider,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILoggerService private readonly loggerService: ILoggerService,
 	) {
 		super();
-		this._logService = this._register(this.loggerService.createLogger('ollama-compactor', { name: 'Dark Matter Compactor' }));
+		this._logService = this._register(this.loggerService.createLogger('localLLM-compactor', { name: 'Dark Matter Compactor' }));
 	}
 
 	/**
@@ -49,7 +49,7 @@ export class ConversationCompactor extends Disposable {
 		maxHistoryTokens: number,
 		token: CancellationToken
 	): Promise<CompactedHistory> {
-		const enabled = this.configurationService.getValue<boolean>('ollamaAgent.conversationCompaction.enabled');
+		const enabled = this.configurationService.getValue<boolean>('localLLM.conversationCompaction.enabled');
 		if (enabled === false) {
 			return {
 				recap: undefined,
@@ -58,7 +58,7 @@ export class ConversationCompactor extends Disposable {
 			};
 		}
 
-		const recentTurnCount = this.configurationService.getValue<number>('ollamaAgent.conversationCompaction.recentTurns') || 6;
+		const recentTurnCount = this.configurationService.getValue<number>('localLLM.conversationCompaction.recentTurns') || 6;
 
 		// Estimate total token count of full history
 		const allMessages = this.historyToMessages(history);
@@ -114,10 +114,10 @@ export class ConversationCompactor extends Disposable {
 	}
 
 	/**
-	 * Convert history entries to OllamaChatMessage pairs.
+	 * Convert history entries to LLMChatMessage pairs.
 	 */
-	private historyToMessages(history: IChatAgentHistoryEntry[]): OllamaChatMessage[] {
-		const messages: OllamaChatMessage[] = [];
+	private historyToMessages(history: IChatAgentHistoryEntry[]): LLMChatMessage[] {
+		const messages: LLMChatMessage[] = [];
 		for (const entry of history) {
 			messages.push({ role: 'user', content: entry.request.message });
 			if (entry.response) {
@@ -157,7 +157,7 @@ export class ConversationCompactor extends Disposable {
 			turnTexts.push(turnText);
 		}
 
-		const prompt: OllamaChatMessage[] = [
+		const prompt: LLMChatMessage[] = [
 			{
 				role: 'system',
 				content: 'You are summarizing a conversation between a user and an AI coding assistant. ' +
@@ -200,7 +200,7 @@ export class ConversationCompactor extends Disposable {
 			turnTexts.push(turnText);
 		}
 
-		const prompt: OllamaChatMessage[] = [
+		const prompt: LLMChatMessage[] = [
 			{
 				role: 'system',
 				content: 'You are updating a conversation recap. Given an existing recap and new conversation turns, ' +
@@ -217,12 +217,12 @@ export class ConversationCompactor extends Disposable {
 	}
 
 	/**
-	 * Call the Ollama model and collect the full response.
+	 * Call the local LLM model and collect the full response.
 	 */
-	private async callModel(prompt: OllamaChatMessage[], token: CancellationToken): Promise<string | undefined> {
+	private async callModel(prompt: LLMChatMessage[], token: CancellationToken): Promise<string | undefined> {
 		let result = '';
 		try {
-			for await (const chunk of this.ollamaProvider.sendChatRequest(prompt, token)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
 				result += chunk;
 				if (token.isCancellationRequested) { return undefined; }
 			}
@@ -236,7 +236,7 @@ export class ConversationCompactor extends Disposable {
 	/**
 	 * Rough token estimation (chars / 4).
 	 */
-	private estimateTokens(messages: OllamaChatMessage[]): number {
+	private estimateTokens(messages: LLMChatMessage[]): number {
 		let totalChars = 0;
 		for (const msg of messages) {
 			totalChars += msg.content.length;

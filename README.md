@@ -1,6 +1,6 @@
 # Dark Matter IDE
 
-**AI-Powered Code Editor with Built-in Ollama Integration**
+**AI-Powered Code Editor with Built-in Local LLM Integration**
 
 Dark Matter is an open-source code editor forked from [VS Code OSS](https://github.com/microsoft/vscode), designed to provide local AI assistance directly within the development workflow. It requires no cloud APIs, no subscriptions, and ensures that no project data leaves the local machine.
 
@@ -12,19 +12,20 @@ Dark Matter is an open-source code editor forked from [VS Code OSS](https://gith
 
 ## Key Features
 
-### Built-in Ollama AI Chat
-Dark Matter includes a fully integrated Ollama chat agent. Users can install [Ollama](https://ollama.com), download a model, and begin interacting with the AI directly within the editor environment.
+### Built-in Local AI Chat
+Dark Matter includes a fully integrated local LLM chat agent that works with any OpenAI-compatible backend. Users can connect to [Ollama](https://ollama.com), [llama.cpp](https://github.com/ggerganov/llama.cpp), [LM Studio](https://lmstudio.ai/), or any other compatible server to interact with AI directly within the editor.
 
-*   **Zero Configuration**: Works out of the box with local Ollama instances.
-*   **Model Flexibility**: Compatible with Gemma, Llama, Mistral, CodeLlama, DeepSeek, and other Ollama models.
+*   **Zero Configuration**: Works out of the box with a local Ollama instance (default) or any OpenAI-compatible backend.
+*   **Multi-Backend Support**: Connect to Ollama, llama-server (llama.cpp), LM Studio, Jan, vLLM, or any `/v1/chat/completions`-compatible endpoint.
+*   **Model Flexibility**: Compatible with Gemma, Llama, Mistral, CodeLlama, DeepSeek, and any model supported by your backend.
 *   **100% Private**: All AI processing occurs locally on the user's hardware.
 *   **Workspace Awareness**: The AI agent understands the project structure and local file contents.
-*   **Remote Server Support**: Capability to connect to an Ollama instance running on any machine within the network.
+*   **Remote Server Support**: Capability to connect to a local LLM backend running on any machine within the network.
 
 ### Dynamic Context Awareness
 Dark Matter is designed for deep project understanding. By default, it targets a **128k token context window** (configurable up to 256k). Upon connecting to a model, the IDE automatically queries the model's native limits and dynamically scales the context to match the maximum supported resolution of your local model.
 
-You can manually adjust the **Maximum Context Window** in Settings (`ollamaAgent.maxContextWindow`) to better suit your GPU's VRAM capacity.
+You can manually adjust the **Maximum Context Window** in Settings (`localLLM.maxContextWindow`) to better suit your GPU's VRAM capacity.
 
 ### Extension Marketplace
 Full access to the [Open VSX Registry](https://open-vsx.org/), allowing users to install thousands of extensions for language support, themes, debugging, and productivity.
@@ -46,7 +47,7 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 > *   **Model Size**: A 7B-9B model typically requires ~5-8GB of VRAM.
 > *   **Context Overhead**: A 256k context window can add an additional **4GB to 8GB** of VRAM overhead depending on the model architecture.
 >
-> If you experience "100% CPU usage" or slow responses, it usually means Ollama has run out of GPU memory and is falling back to the CPU. In this case, consider using a smaller model or reducing project size.
+> If you experience "100% CPU usage" or slow responses, it usually means the LLM backend has run out of GPU memory and is falling back to the CPU. In this case, consider using a smaller model or reducing project size.
 
 ---
 
@@ -71,14 +72,14 @@ If you want to build Dark Matter IDE from source, you will need to install the f
 3.  **C++ Build Tools** — [Build Tools for Visual Studio 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **"Desktop development with C++"** workload.
 4.  **Inno Setup 6 (Optional)** — Required only for `.exe` installer.
 5.  **Git**
-6.  **Ollama**
+6.  **A local LLM backend** — e.g., [Ollama](https://ollama.com), [llama-server](https://github.com/ggerganov/llama.cpp), or [LM Studio](https://lmstudio.ai/)
 
 #### Linux (Debian/Ubuntu)
 1.  **Node.js** (v22.x LTS recommended)
 2.  **Python 3.10+**
 3.  **Build Tools**: `sudo apt-get install build-essential g++ libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev`
 4.  **Git**
-5.  **Ollama**
+5.  **A local LLM backend** — e.g., [Ollama](https://ollama.com), [llama-server](https://github.com/ggerganov/llama.cpp), or [LM Studio](https://lmstudio.ai/)
 
 
 ### Building from Source (Windows)
@@ -128,10 +129,12 @@ npm run gulp -- vscode-linux-x64-build-deb
 
 
 ### Using the AI Agent
-1.  Ensure the Ollama server is active (`ollama serve`).
+1.  Start your local LLM backend (e.g., `ollama serve` for Ollama, or launch llama-server / LM Studio).
 2.  Launch Dark Matter.
 3.  Open the Chat panel from the primary sidebar.
 4.  Select the desired model from the dropdown menu and begin the session.
+
+> **Tip**: You can configure the backend URL and model via the status bar AI icon or in Settings under `localLLM.*`.
 
 ---
 
@@ -141,9 +144,9 @@ Dark Matter extends VS Code OSS with the following components:
 
 | Component | Description |
 |-----------|-------------|
-| **Ollama Chat Agent** | Integrated chat participant managing local AI communication. |
-| **Language Model Provider** | Registers Ollama models as first-class providers within the IDE. |
-| **Large Context Integration** | Pre-configured 256k context awareness for deep project understanding. |
+| **Local LLM Chat Agent** | Integrated chat participant managing local AI communication via any OpenAI-compatible backend. |
+| **Language Model Provider** | Registers local models as first-class providers within the IDE's model picker. |
+| **Large Context Integration** | Pre-configured 128k–256k context awareness for deep project understanding. |
 | **Custom Welcome UI** | Professional startup experience tailored for AI-driven development. |
 
 ---
@@ -173,4 +176,5 @@ Licensed under the [MIT License](LICENSE.txt). Dark Matter is a fork of [Visual 
 ## Acknowledgments
 *   The Microsoft VS Code team for the foundational platform.
 *   The Ollama team for democratizing local LLM access.
+*   The llama.cpp team for making high-performance local inference accessible.
 *   The Open VSX Registry for maintaining an open extension ecosystem.

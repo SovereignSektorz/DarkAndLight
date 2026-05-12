@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -119,9 +119,13 @@ export class EditorGroupWatermark extends Disposable {
 		// Buttons
 		const actions = $('div.dm-actions');
 		const buttons = [
+			// allow-any-unicode-next-line
 			{ icon: '📄', cls: 'i1', title: 'New File', desc: 'Create an empty file', sc: 'Ctrl+N', cmd: 'workbench.action.files.newUntitledFile' },
+			// allow-any-unicode-next-line
 			{ icon: '📂', cls: 'i2', title: 'Open File', desc: 'Open an existing file', sc: 'Ctrl+O', cmd: 'workbench.action.files.openFile' },
+			// allow-any-unicode-next-line
 			{ icon: '📁', cls: 'i3', title: 'Open Folder', desc: 'Open a folder as workspace', sc: 'Ctrl+K O', cmd: 'workbench.action.files.openFolder' },
+			// allow-any-unicode-next-line
 			{ icon: '⚡', cls: 'i4', title: 'Clone Repository', desc: 'Clone from Git', cmd: 'git.clone' },
 		];
 
@@ -158,7 +162,7 @@ export class EditorGroupWatermark extends Disposable {
 
 		// Footer
 		const footer = $('p.dm-footer');
-		footer.textContent = 'v1.0.0 · Local AI · Powered by Ollama';
+		footer.textContent = 'v1.0.0 · Local AI · Powered by Local LLM';
 		content.appendChild(footer);
 
 		watermark.appendChild(content);

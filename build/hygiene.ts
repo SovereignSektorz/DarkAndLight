@@ -136,9 +136,9 @@ const darkMatterCopyrightHeaderLines = [
 	const copyrights = es.through(function (file: VinylFileWithLines) {
 		const lines = file.__lines;
 
-		// Files in our custom ollama/ directory may use either the upstream Microsoft header
+		// Files in our custom localLLM/ directory may use either the upstream Microsoft header
 		// or the Dark Matter IDE Contributors header.
-		const isDarkMatterFile = file.relative.replace(/\\/g, '/').includes('contrib/chat/browser/ollama/');
+		const isDarkMatterFile = file.relative.replace(/\\/g, '/').includes('contrib/chat/browser/localLLM/');
 
 		const microsoftMatch = copyrightHeaderLines.every((l, i) => lines[i] === l);
 		const darkMatterMatch = darkMatterCopyrightHeaderLines.every((l, i) => lines[i] === l);

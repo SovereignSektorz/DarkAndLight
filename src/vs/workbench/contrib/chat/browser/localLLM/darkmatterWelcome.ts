@@ -62,20 +62,20 @@ export class DarkMatterWelcomeContribution extends Disposable implements IWorkbe
 				{ id: 'continue', label: '$(rocket) Get Started', detail: 'Configure your AI server and default model' },
 				{ id: 'skip', label: '$(debug-step-over) Skip Setup', detail: 'Use default settings (localhost:11434, llama3.1)' },
 			],
-			{ title: 'Welcome to Dark Matter!', placeHolder: 'Dark Matter is an AI-powered IDE. Let\'s connect to your Ollama server.' }
+			{ title: 'Welcome to Dark Matter!', placeHolder: 'Dark Matter is an AI-powered IDE. Let\'s connect to your local AI server.' }
 		);
 
 		if (!welcome || welcome.id === 'skip') { this.markSetupComplete(); return; }
 
-		const currentUrl = this.configurationService.getValue<string>('ollamaAgent.baseUrl') || 'http://127.0.0.1:11434';
+		const currentUrl = this.configurationService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
 		const serverUrl = await this.quickInputService.input({
-			title: 'Step 1/2: Ollama Server URL', value: currentUrl,
-			prompt: 'Enter the URL of your Ollama server.',
+			title: 'Step 1/2: Local AI Server URL', value: currentUrl,
+			prompt: 'Enter the URL of your local AI server.',
 			validateInput: async (v) => { try { new URL(v); return undefined; } catch { return 'Invalid URL'; } },
 		});
 
 		if (serverUrl === undefined) { this.markSetupComplete(); return; }
-		if (serverUrl !== currentUrl) { await this.configurationService.updateValue('ollamaAgent.baseUrl', serverUrl); }
+		if (serverUrl !== currentUrl) { await this.configurationService.updateValue('localLLM.baseUrl', serverUrl); }
 
 		const baseUrl = serverUrl || currentUrl;
 		let models: { name: string; size: number }[] = [];
@@ -92,7 +92,7 @@ export class DarkMatterWelcomeContribution extends Disposable implements IWorkbe
 			this.markSetupComplete(); return;
 		}
 
-		const currentModel = this.configurationService.getValue<string>('ollamaAgent.model') || 'llama3.1';
+		const currentModel = this.configurationService.getValue<string>('localLLM.model') || 'llama3.1';
 		const modelItems: IQuickPickItem[] = models.map(m => ({
 			id: m.name,
 			label: m.name === currentModel ? `$(check) ${m.name}` : `     ${m.name}`,
@@ -104,7 +104,7 @@ export class DarkMatterWelcomeContribution extends Disposable implements IWorkbe
 			title: 'Step 2/2: Choose Default Model', placeHolder: 'Select default model',
 		});
 
-		if (sel?.id && sel.id !== currentModel) { await this.configurationService.updateValue('ollamaAgent.model', sel.id); }
+		if (sel?.id && sel.id !== currentModel) { await this.configurationService.updateValue('localLLM.model', sel.id); }
 		this.markSetupComplete();
 	}
 

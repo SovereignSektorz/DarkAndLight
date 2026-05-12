@@ -28,16 +28,16 @@ import {
 // Tool IDs
 // ============================================================================
 
-export const OllamaCreateFileToolId = 'ollama_createFile';
-export const OllamaDeleteFileToolId = 'ollama_deleteFile';
-export const OllamaRunCommandToolId = 'ollama_runCommand';
+export const LocalLLMCreateFileToolId = 'localLLM_createFile';
+export const LocalLLMDeleteFileToolId = 'localLLM_deleteFile';
+export const LocalLLMRunCommandToolId = 'localLLM_runCommand';
 
 // ============================================================================
 // Tool Data (metadata for the tool registry)
 // ============================================================================
 
-export const OllamaCreateFileToolData: IToolData = {
-	id: OllamaCreateFileToolId,
+export const LocalLLMCreateFileToolData: IToolData = {
+	id: LocalLLMCreateFileToolId,
 	displayName: 'Create/Overwrite File',
 	modelDescription: 'Creates or overwrites a file in the workspace.',
 	source: ToolDataSource.Internal,
@@ -55,8 +55,8 @@ export const OllamaCreateFileToolData: IToolData = {
 	},
 };
 
-export const OllamaDeleteFileToolData: IToolData = {
-	id: OllamaDeleteFileToolId,
+export const LocalLLMDeleteFileToolData: IToolData = {
+	id: LocalLLMDeleteFileToolId,
 	displayName: 'Delete File',
 	modelDescription: 'Deletes a file or directory from the workspace.',
 	source: ToolDataSource.Internal,
@@ -72,8 +72,8 @@ export const OllamaDeleteFileToolData: IToolData = {
 	},
 };
 
-export const OllamaRunCommandToolData: IToolData = {
-	id: OllamaRunCommandToolId,
+export const LocalLLMRunCommandToolData: IToolData = {
+	id: LocalLLMRunCommandToolId,
 	displayName: 'Run Terminal Command',
 	modelDescription: 'Runs a terminal command in the workspace.',
 	source: ToolDataSource.Internal,
@@ -113,7 +113,7 @@ export interface IRunCommandToolParams {
 // Create/Overwrite File Tool
 // ============================================================================
 
-export class OllamaCreateFileTool implements IToolImpl {
+export class LocalLLMCreateFileTool implements IToolImpl {
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
@@ -140,7 +140,6 @@ export class OllamaCreateFileTool implements IToolImpl {
 		const rootUri = URI.revive(params.rootUri);
 		const fileUri = URI.joinPath(rootUri, params.filePath);
 
-		// Ensure parent directory exists
 		const dirUri = dirname(fileUri);
 		try { await this.fileService.createFolder(dirUri); } catch { }
 
@@ -157,7 +156,7 @@ export class OllamaCreateFileTool implements IToolImpl {
 // Delete File Tool
 // ============================================================================
 
-export class OllamaDeleteFileTool implements IToolImpl {
+export class LocalLLMDeleteFileTool implements IToolImpl {
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
@@ -194,7 +193,7 @@ export class OllamaDeleteFileTool implements IToolImpl {
 // Run Terminal Command Tool
 // ============================================================================
 
-export class OllamaRunCommandTool implements IToolImpl {
+export class LocalLLMRunCommandTool implements IToolImpl {
 
 	constructor(
 		@ITerminalService private readonly terminalService: ITerminalService,
@@ -211,7 +210,6 @@ export class OllamaRunCommandTool implements IToolImpl {
 				message: new MarkdownString(`The AI wants to run a terminal command:\n\n\`${params.command}\``),
 				allowAutoConfirm: true,
 			},
-			// Use the terminal-specific UI for command confirmation
 			toolSpecificData: {
 				kind: 'terminal',
 				commandLine: { original: params.command },
@@ -223,17 +221,14 @@ export class OllamaRunCommandTool implements IToolImpl {
 	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, progress: ToolProgress, _token: CancellationToken): Promise<IToolResult> {
 		const params = invocation.parameters as IRunCommandToolParams;
 
-		// Find or create the Dark Matter Agent terminal
 		const existing = this.terminalService.instances.find(
 			i => i.title === 'Dark Matter Agent' || i.shellLaunchConfig?.name === 'Dark Matter Agent'
 		);
 		const terminal = existing || await this.terminalService.createTerminal({ config: { name: 'Dark Matter Agent' } });
 
 		await terminal.sendText(params.command, true);
-
 		progress.report({ message: new MarkdownString(`Running: \`${params.command}\``) });
 
-		// Capture terminal output with silence-based detection
 		const output = await this.captureTerminalOutput(terminal);
 
 		return {
