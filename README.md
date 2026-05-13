@@ -55,7 +55,8 @@ Dark Matter retains all standard features of the VS Code ecosystem, including In
 
 If you prefer not to build from source, you can download pre-compiled binaries for Windows and Linux directly from the [GitHub Releases page](https://github.com/abmina/dark-matter-ide/releases).
 
-*   **Windows**: Download the `.zip` archive for a portable build. (Automated `.exe` installer coming soon!)
+*   **Windows Installer**: Download `DarkMatter-win32-x64-Setup.exe` for a full installation with Start Menu shortcuts, file associations, and PATH integration.
+*   **Windows Portable**: Download `DarkMatter-win32-x64.zip` for a portable build — extract and run `Dark Matter.exe`.
 *   **Linux (Debian/Ubuntu)**: Download the `.deb` package for an easy installation, or the `.tar.gz` archive for a portable build.
 
 ---
