@@ -545,7 +545,9 @@ export class LocalLLMChatAgent extends Disposable {
 		// Determine which model to use: picker selection > settings default
 		const selectedModel = request.userSelectedModelId || undefined;
 		const activeModelName = selectedModel
-			? (selectedModel.startsWith('ollama:') ? selectedModel.slice('ollama:'.length) : selectedModel)
+			? (selectedModel.startsWith('localLLM:') ? selectedModel.slice('localLLM:'.length)
+				: selectedModel.startsWith('ollama:') ? selectedModel.slice('ollama:'.length)
+				: selectedModel)
 			: this.llmProvider.model;
 		this._logService.info(`[LocalLLM] Handling request with model "${activeModelName}": "${request.message.substring(0, 100)}"`);
 

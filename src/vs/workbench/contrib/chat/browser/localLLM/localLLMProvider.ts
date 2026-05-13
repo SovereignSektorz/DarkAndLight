@@ -189,9 +189,12 @@ export class LocalLLMProvider extends Disposable {
 		modelOverride?: string,
 	): AsyncIterable<string> {
 		let activeModel = modelOverride || this.model;
-		// Strip the legacy "ollama:" vendor prefix only (e.g. "ollama:llama3.1" → "llama3.1").
-		// Do NOT strip other colons — they are part of valid Ollama model tags (e.g. "gemma3:4b").
-		if (activeModel.startsWith('ollama:')) {
+		// Strip the "localLLM:" vendor prefix added by the model picker
+		// (e.g. "localLLM:gemma4:e4b" → "gemma4:e4b").
+		// Also handle legacy "ollama:" prefix for backward compatibility.
+		if (activeModel.startsWith('localLLM:')) {
+			activeModel = activeModel.slice('localLLM:'.length);
+		} else if (activeModel.startsWith('ollama:')) {
 			activeModel = activeModel.slice('ollama:'.length);
 		}
 
