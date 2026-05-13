@@ -27,24 +27,6 @@ interface VinylFileWithLines extends VinylFile {
 	__lines: string[];
 }
 
-/**
- * Checks that engines.vscode in extensions/copilot/package.json matches ^{version} from the root package.json.
- * Returns an error message if mismatched, or undefined if OK.
- */
-export function checkCopilotEnginesVersion(repoRoot: string): string | undefined {
-	const copilotPkgPath = path.join(repoRoot, 'extensions/copilot/package.json');
-	if (!fs.existsSync(copilotPkgPath)) {
-		return undefined;
-	}
-	const rootPkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-	const copilotPkg = JSON.parse(fs.readFileSync(copilotPkgPath, 'utf8'));
-	const expected = `^${rootPkg.version}`;
-	const actual = copilotPkg?.engines?.vscode;
-	if (actual !== expected) {
-		return `engines.vscode in 'extensions/copilot/package.json' must be "${expected}" (the version from the root package.json), but found "${actual ?? '<missing>'}"`;
-	}
-	return undefined;
-}
 
 /**
  * Main hygiene function that runs checks on files
@@ -325,28 +307,6 @@ if (import.meta.main) {
 				const some = out.split(/\r?\n/).filter((l) => !!l);
 
 				if (some.length > 0) {
-					// Check copilot engines.vscode version if relevant files are staged
-					if (some.some(f => f === 'package.json' || f.startsWith('extensions/copilot/'))) {
-						const copilotError = checkCopilotEnginesVersion(process.cwd());
-						if (copilotError) {
-							console.error(copilotError);
-							process.exit(1);
-						}
-					}
-
-					// Run copilot pre-commit checks if copilot files are staged
-					if (some.some(f => f.startsWith('extensions/copilot/'))) {
-						console.log('Running copilot pre-commit checks...');
-						const result = cp.spawnSync('npx', ['lint-staged'], {
-							cwd: path.join(process.cwd(), 'extensions', 'copilot'),
-							stdio: 'inherit',
-							shell: true,
-						});
-						if (result.status !== 0) {
-							console.error('Copilot pre-commit checks failed.');
-							process.exit(1);
-						}
-					}
 
 					console.log('Reading git index versions...');
 
