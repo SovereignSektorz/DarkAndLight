@@ -3,7 +3,7 @@ name: Code OSS
 on:
   pull_request:
     branches:
-      - master
+      - main
       - 'release/*'
 
 concurrency:

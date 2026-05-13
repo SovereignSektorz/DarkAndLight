@@ -3,7 +3,7 @@ name: Code OSS (node_modules)
 on:
   push:
     branches:
-      - master
+      - main
 
 permissions: {}
 

@@ -2,10 +2,10 @@ name: Checking Component Screenshots
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
     branches:
-      - master
+      - main
       - 'release/*'
 
 permissions:

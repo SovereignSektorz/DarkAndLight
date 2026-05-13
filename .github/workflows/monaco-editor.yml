@@ -3,16 +3,16 @@ name: Monaco Editor checks
 on:
   push:
     branches:
-      - master
+      - main
       - release/*
   pull_request:
     branches:
-      - master
+      - main
       - release/*
 permissions: {}
 
 jobs:
-  master:
+  main:
     name: Monaco Editor checks
     runs-on: ubuntu-latest
     timeout-minutes: 40
