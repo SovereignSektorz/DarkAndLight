@@ -41,7 +41,12 @@ function packageInnoSetup(iss: string, options: { definitions?: Record<string, u
 
 	keys.forEach(key => assert(typeof definitions[key] === 'string', `Missing value for '${key}' in Inno Setup package step`));
 
-	const defs = keys.map(key => `/d${key}=${definitions[key]}`);
+	const defs = keys.map(key => {
+		let val = String(definitions[key]);
+		// Inno Setup treats "{" as a constant marker — escape literal braces in GUIDs
+		val = val.replace(/\{/g, '{{');
+		return `/d${key}=${val}`;
+	});
 	const args = [
 		iss,
 		...defs,
