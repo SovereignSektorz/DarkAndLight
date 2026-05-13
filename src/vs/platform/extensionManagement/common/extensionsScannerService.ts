@@ -450,10 +450,6 @@ export abstract class AbstractExtensionsScannerService extends Disposable implem
 		const extensionsScanner = extensionsScannerInput.devMode ? this.extensionsScanner : this.systemExtensionsCachedScanner;
 		const result = await extensionsScanner.scanExtensions(extensionsScannerInput);
 		this.logService.trace('Scanned system extensions:', result.length);
-		// Dark Matter DEBUG: Log all scanned system extensions and highlight our target
-		const ollamaExt = result.find(e => /local|ollama|darkmatter/i.test(e.identifier.id));
-		this.logService.info(`[Dark Matter DEBUG] scanDefaultSystemExtensions: total=${result.length}, ollamaExt=${ollamaExt ? `FOUND id=${ollamaExt.identifier.id} isValid=${ollamaExt.isValid} validations=${JSON.stringify(ollamaExt.validations)}` : 'NOT FOUND'}`);
-		this.logService.info(`[Dark Matter DEBUG] systemExtensionsLocation: ${this.systemExtensionsLocation.toString()}`);
 		return result;
 	}
 
@@ -621,21 +617,26 @@ class ExtensionsScanner extends Disposable {
 			: this.scanExtensionsFromLocation(input);
 	}
 
+	/** Subdirectory names inside an extensions folder that are never extensions themselves */
+	private static readonly NON_EXTENSION_DIRS = new Set(['node_modules', 'out', 'types', '.git', 'dist', 'build']);
+
 	private async scanExtensionsFromLocation(input: ExtensionScannerInput): Promise<IRelaxedScannedExtension[]> {
 		const stat = await this.fileService.resolve(input.location);
 		if (!stat.children?.length) {
 			return [];
 		}
-		// Dark Matter DEBUG: Log all child directories being scanned
-		const dirs = stat.children.filter(c => c.isDirectory).map(c => basename(c.resource));
-		this.logService.info(`[Dark Matter DEBUG] scanExtensionsFromLocation: location=${input.location.path}, directories=[${dirs.join(', ')}], hasDarkMatter=${dirs.some(d => /darkmatter/i.test(d))}`);
 		const extensions = await Promise.all<IRelaxedScannedExtension | null>(
 			stat.children.map(async c => {
 				if (!c.isDirectory) {
 					return null;
 				}
+				const dirName = basename(c.resource);
+				// Skip known non-extension subdirectories to avoid noisy scan failures
+				if (ExtensionsScanner.NON_EXTENSION_DIRS.has(dirName)) {
+					return null;
+				}
 				// Do not consider user extension folder starting with `.`
-				if (input.type === ExtensionType.User && basename(c.resource).indexOf('.') === 0) {
+				if (input.type === ExtensionType.User && dirName.indexOf('.') === 0) {
 					return null;
 				}
 				const extensionScannerInput = new ExtensionScannerInput(c.resource, input.mtime, input.applicationExtensionslocation, input.applicationExtensionslocationMtime, input.profile, input.profileScanOptions, input.type, input.validate, input.productVersion, input.productDate, input.productCommit, input.devMode, input.language, input.translations);
@@ -706,9 +707,8 @@ class ExtensionsScanner extends Disposable {
 					engines: { vscode: '' }
 				};
 			} else {
-				// Dark Matter DEBUG: Always log scan failures, even for system extensions
-				this.logService.error(`[Dark Matter DEBUG] Extension scan failed for ${input.location.path}: ${getErrorMessage(e)}`);
 				if (input.type !== ExtensionType.System) {
+					this.logService.error(`Extension scan failed for ${input.location.path}: ${getErrorMessage(e)}`);
 					this.logService.error(e);
 				}
 				return null;

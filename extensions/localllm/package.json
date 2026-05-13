@@ -6,8 +6,5 @@
   "description": "Built-in extension definition to satisfy extension host activation for the Local LLM chat agent.",
   "engines": {
     "vscode": "^1.90.0"
-  },
-  "activationEvents": [
-    "*"
-  ]
+  }
 }

@@ -189,9 +189,10 @@ export class LocalLLMProvider extends Disposable {
 		modelOverride?: string,
 	): AsyncIterable<string> {
 		let activeModel = modelOverride || this.model;
-		// Strip legacy vendor prefix if still used anywhere (e.g. "ollama:llama3.1")
-		if (activeModel.includes(':') && activeModel.indexOf(':') < 10) {
-			activeModel = activeModel.split(':').slice(1).join(':');
+		// Strip the legacy "ollama:" vendor prefix only (e.g. "ollama:llama3.1" → "llama3.1").
+		// Do NOT strip other colons — they are part of valid Ollama model tags (e.g. "gemma3:4b").
+		if (activeModel.startsWith('ollama:')) {
+			activeModel = activeModel.slice('ollama:'.length);
 		}
 
 		const url = `${this.baseUrl}/v1/chat/completions`;
@@ -213,7 +214,7 @@ export class LocalLLMProvider extends Disposable {
 		));
 
 		const abortController = new AbortController();
-		token.onCancellationRequested(() => abortController.abort());
+		const cancelListener = token.onCancellationRequested(() => abortController.abort());
 
 		let response: Response;
 		try {
@@ -224,6 +225,7 @@ export class LocalLLMProvider extends Disposable {
 				signal: abortController.signal,
 			});
 		} catch (err) {
+			cancelListener.dispose();
 			if ((err as Error).name === 'AbortError') { throw err; }
 			throw new Error(
 				`Failed to connect to the LLM backend at ${this.baseUrl}. ` +
@@ -232,12 +234,14 @@ export class LocalLLMProvider extends Disposable {
 		}
 
 		if (!response.ok) {
+			cancelListener.dispose();
 			const errorText = await response.text();
 			throw new Error(`LLM request failed (${response.status}): ${errorText}`);
 		}
 
 		const reader = response.body?.getReader();
 		if (!reader) {
+			cancelListener.dispose();
 			throw new Error('No response body from LLM backend');
 		}
 
@@ -287,6 +291,7 @@ export class LocalLLMProvider extends Disposable {
 			}
 		} finally {
 			reader.releaseLock();
+			cancelListener.dispose();
 		}
 	}
 }

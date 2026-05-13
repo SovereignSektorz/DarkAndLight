@@ -21,6 +21,7 @@ const IGNORED_DIRS = new Set([
 	'.next', '.nuxt', '__pycache__', '.pytest_cache', '.mypy_cache',
 	'target', 'bin', 'obj', '.gradle', '.idea', '.vscode',
 	'vendor', 'coverage', '.cache', '.turbo', '.parcel-cache',
+	'.pio', 'libdeps',  // PlatformIO build artifacts and library dependencies
 ]);
 
 /** File extensions to skip (binary/large) */
