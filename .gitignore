@@ -2,6 +2,9 @@
 .cache
 npm-debug.log
 Thumbs.db
+Gemma4_stream_output.txt
+deepseek_stream_output.txt
+darkmatter_llm_chat_log.txt
 node_modules/
 .tmp/
 .build/

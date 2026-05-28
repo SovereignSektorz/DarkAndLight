@@ -53,6 +53,7 @@ export class LocalLLMProvider extends Disposable {
 	readonly onDidChange: Event<void> = this._onDidChange.event;
 
 	private readonly _logService: ILogger;
+	private readonly _networkLogService: ILogger;
 
 	constructor(
 		@IConfigurationService private readonly configurationService: IConfigurationService,
@@ -60,6 +61,7 @@ export class LocalLLMProvider extends Disposable {
 	) {
 		super();
 		this._logService = this._register(this.loggerService.createLogger('local-llm', { name: 'Dark Matter LLM' }));
+		this._networkLogService = this._register(this.loggerService.createLogger('local-llm-network', { name: 'Dark Matter LLM Network Debug' }));
 
 		this._register(this.configurationService.onDidChangeConfiguration(e => {
 			if (
@@ -210,11 +212,15 @@ export class LocalLLMProvider extends Disposable {
 			frequency_penalty: 0.1,   // mirrors old repeat_penalty: 1.2 behaviour
 		};
 
+		const bodyStr = JSON.stringify(body);
+
 		this._logService.info(localize(
 			'localLLM.sendingRequest',
 			'[LocalLLM] POST {0} model={1} max_tokens={2}',
 			url, activeModel, maxTokens,
 		));
+		this._networkLogService.info(`\n\n--- NEW REQUEST ---`);
+		this._networkLogService.info(`POST ${url}\n${bodyStr}`);
 
 		const abortController = new AbortController();
 		const cancelListener = token.onCancellationRequested(() => abortController.abort());
@@ -224,7 +230,7 @@ export class LocalLLMProvider extends Disposable {
 			response = await fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(body),
+				body: bodyStr,
 				signal: abortController.signal,
 			});
 		} catch (err) {
@@ -242,6 +248,8 @@ export class LocalLLMProvider extends Disposable {
 			throw new Error(`LLM request failed (${response.status}): ${errorText}`);
 		}
 
+		this._logService.info(`[LocalLLM] Connection established (HTTP ${response.status}). Waiting for first token...`);
+
 		const reader = response.body?.getReader();
 		if (!reader) {
 			cancelListener.dispose();
@@ -250,6 +258,9 @@ export class LocalLLMProvider extends Disposable {
 
 		const decoder = new TextDecoder();
 		let buffer = '';
+		let firstByteReceived = false;
+		const startTime = Date.now();
+		let inReasoning = false;
 
 		try {
 			while (true) {
@@ -258,7 +269,16 @@ export class LocalLLMProvider extends Disposable {
 				const { done, value } = await reader.read();
 				if (done || token.isCancellationRequested) {
 					if (token.isCancellationRequested) { await reader.cancel(); }
+					if (inReasoning) {
+						yield '\n</think>\n';
+					}
 					break;
+				}
+
+				if (!firstByteReceived) {
+					firstByteReceived = true;
+					const ttft = ((Date.now() - startTime) / 1000).toFixed(2);
+					this._logService.info(`[LocalLLM] First token received! TTFT (Time To First Token): ${ttft}s. Streaming generation...`);
 				}
 
 				buffer += decoder.decode(value, { stream: true });
@@ -271,20 +291,47 @@ export class LocalLLMProvider extends Disposable {
 
 					// OpenAI SSE format: "data: {...}"
 					const jsonStr = line.startsWith('data: ') ? line.slice(6) : line;
+					this._networkLogService.info(jsonStr);
 
 					try {
 						const chunk = JSON.parse(jsonStr);
+						const delta = chunk.choices?.[0]?.delta;
+						
+						// Some backends return reasoning_content or reasoning instead of raw tags
+						const reasoningText: string | undefined = delta?.reasoning_content || delta?.reasoning;
+						if (reasoningText) {
+							if (!inReasoning) {
+								yield '<think>\n';
+								inReasoning = true;
+							}
+							yield reasoningText;
+						}
+
 						// Standard OpenAI chunk: choices[0].delta.content
-						const content: string | undefined = chunk.choices?.[0]?.delta?.content;
-						if (content) { yield content; }
+						const content: string | undefined = delta?.content;
+						if (content) {
+							if (inReasoning) {
+								yield '\n</think>\n';
+								inReasoning = false;
+							}
+							yield content;
+						}
 
 						// Some backends (e.g. older llama.cpp) use top-level "content" field
 						if (!content && typeof chunk.content === 'string' && chunk.content) {
+							if (inReasoning) {
+								yield '\n</think>\n';
+								inReasoning = false;
+							}
 							yield chunk.content;
 						}
 
 						// Signal end of stream
 						if (chunk.choices?.[0]?.finish_reason === 'stop' || chunk.done === true) {
+							if (inReasoning) {
+								yield '\n</think>\n';
+								inReasoning = false;
+							}
 							return;
 						}
 					} catch {

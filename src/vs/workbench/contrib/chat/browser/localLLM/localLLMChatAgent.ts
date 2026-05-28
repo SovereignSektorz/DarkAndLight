@@ -26,7 +26,7 @@ import { isLocation } from '../../../../../editor/common/languages.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 import { ILanguageModelToolsService, CountTokensCallback } from '../../common/tools/languageModelToolsService.js';
-import { LocalLLMCreateFileToolId, LocalLLMDeleteFileToolId, LocalLLMRunCommandToolId } from './localLLMTools.js';
+import { LocalLLMRunCommandToolId } from './localLLMTools.js';
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
@@ -94,12 +94,14 @@ export class LocalLLMChatAgent extends Disposable {
 		// Remove paired tags WITH content: <file_action ...>...</file_action>
 		// Must use greedy [\s\S]* to reliably match large multi-line file content
 		cleaned = cleaned.replace(/<file_action\b[^>]*>[\s\S]*?<\/file_action>/gi, '');
-		// Remove any stray opening/closing tags that lost their pair
+		// Remove stray opening/closing tags that lost their pair
 		cleaned = cleaned.replace(/<\/?file_action[^>]*>/gi, '');
 		// Remove thought blocks: <thought>...</thought>
 		cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
+		cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
 		// Remove stray thought tags
 		cleaned = cleaned.replace(/<\/?thought>/gi, '');
+		cleaned = cleaned.replace(/<\/?think>/gi, '');
 		// Clean up excessive blank lines left behind
 		cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 		return cleaned;
@@ -621,111 +623,11 @@ export class LocalLLMChatAgent extends Disposable {
 		}
 		messages.push({ role: 'user', content: userMessage });
 
-		// Progress
-		progress([{
-			kind: 'progressMessage',
-			content: new MarkdownString(`Thinking with **${activeModelName}**...`),
-		}]);
 
 		try {
-			let totalLength = 0;
-			let inThought = false;
-			let currentBuffer = '';
-			let fullResponse = '';
+			const { totalLength, fullResponse } = await this.streamAndParseResponse(messages, token, selectedModel, progress);
 
-			// Helper reference for file action stripping
-			const stripFileActionTags = LocalLLMChatAgent.stripFileActionTags;
-
-			// Stream the response in real-time, suppressing <thought> and <file_action> tags
-			for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
-				if (token.isCancellationRequested) {
-					break;
-				}
-				totalLength += chunk.length;
-				currentBuffer += chunk;
-				fullResponse += chunk;
-
-				this._logService.trace(`[LocalLLM Agent] Received chunk: ${JSON.stringify(chunk)}`);
-
-				// Process currentBuffer for <thought> and <file_action> tags
-				while (currentBuffer.length > 0) {
-					const lowerBuffer = currentBuffer.toLowerCase();
-
-					if (!inThought) {
-						const startIdx = lowerBuffer.indexOf('<thought>');
-						const fileActionIdx = lowerBuffer.indexOf('<file_action');
-
-						if (startIdx !== -1 && (fileActionIdx === -1 || startIdx <= fileActionIdx)) {
-							if (startIdx > 0) {
-								const beforeThought = stripFileActionTags(currentBuffer.substring(0, startIdx));
-								if (beforeThought.length > 0) {
-									progress([{ kind: 'markdownContent', content: new MarkdownString(beforeThought) }]);
-								}
-							}
-							inThought = true;
-							currentBuffer = currentBuffer.substring(startIdx + '<thought>'.length);
-						} else if (fileActionIdx !== -1) {
-							if (fileActionIdx > 0) {
-								const beforeAction = currentBuffer.substring(0, fileActionIdx);
-								if (beforeAction.trim().length > 0) {
-									progress([{ kind: 'markdownContent', content: new MarkdownString(beforeAction) }]);
-								}
-								currentBuffer = currentBuffer.substring(fileActionIdx);
-								continue;
-							}
-							const selfCloseIdx = currentBuffer.indexOf('/>', fileActionIdx);
-							const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', fileActionIdx);
-							if (selfCloseIdx !== -1 && (pairedCloseIdx === -1 || selfCloseIdx < pairedCloseIdx)) {
-								currentBuffer = currentBuffer.substring(selfCloseIdx + 2);
-							} else if (pairedCloseIdx !== -1) {
-								currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
-							} else {
-								break; // Tag incomplete, wait for more data
-							}
-						} else {
-							const safeLength = Math.max(0, currentBuffer.length - 15);
-							if (safeLength > 0) {
-								const safeText = stripFileActionTags(currentBuffer.substring(0, safeLength));
-								if (safeText.length > 0) {
-									progress([{ kind: 'markdownContent', content: new MarkdownString(safeText) }]);
-								}
-								currentBuffer = currentBuffer.substring(safeLength);
-							}
-							break;
-						}
-					} else {
-						const endIdx = lowerBuffer.indexOf('</thought>');
-						if (endIdx !== -1) {
-							if (endIdx > 0) {
-								this._logService.debug(`[LocalLLM Thought] ${currentBuffer.substring(0, endIdx)}`);
-							}
-							inThought = false;
-							currentBuffer = currentBuffer.substring(endIdx + '</thought>'.length);
-						} else {
-							const safeLength = Math.max(0, currentBuffer.length - 11);
-							if (safeLength > 0) {
-								this._logService.debug(`[LocalLLM Thought] ${currentBuffer.substring(0, safeLength)}`);
-								currentBuffer = currentBuffer.substring(safeLength);
-							}
-							break;
-						}
-					}
-				}
-			}
-
-			// Flush remaining buffer
-			if (currentBuffer.length > 0) {
-				if (inThought) {
-					this._logService.debug(`[LocalLLM Thought] ${currentBuffer}`);
-				} else {
-					const cleaned = stripFileActionTags(currentBuffer);
-					if (cleaned.length > 0) {
-						progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
-					}
-				}
-			}
-
-			this._logService.info(`[LocalLLM] Request completed, response length: ${totalLength}`);
+			this._logService.info(`[LocalLLM] Request completed, response length: ${totalLength}\n\n=== UNFILTERED RAW RESPONSE ===\n${fullResponse}\n===============================`);
 
 			// Parse model-initiated memory updates (explicit code blocks in response)
 			const taskMatch = fullResponse.match(/```task\n([\s\S]*?)```/);
@@ -772,6 +674,12 @@ export class LocalLLMChatAgent extends Disposable {
 			while (depth < LocalLLMChatAgent.MAX_AGENT_LOOP_DEPTH) {
 				const terminalOutputs = await this.executeAgentActions(responseToProcess, request, progress, token);
 
+				// Emit a summary of file operations performed
+				const fileActionSummary = this.buildFileActionSummary(responseToProcess);
+				if (fileActionSummary) {
+					progress([{ kind: 'markdownContent', content: new MarkdownString(fileActionSummary) }]);
+				}
+
 				if (terminalOutputs.length === 0) {
 					break;
 				}
@@ -791,15 +699,7 @@ export class LocalLLMChatAgent extends Disposable {
 
 				progress([{ kind: 'progressMessage', content: new MarkdownString('Analyzing terminal output...') }]);
 
-				let followUpResponse = '';
-				for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
-					if (token.isCancellationRequested) { break; }
-					followUpResponse += chunk;
-					const cleaned = stripFileActionTags(chunk);
-					if (cleaned.length > 0) {
-						progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
-					}
-				}
+				const { fullResponse: followUpResponse } = await this.streamAndParseResponse(messages, token, selectedModel, progress);
 
 				responseToProcess = followUpResponse;
 				if (!/<file_action\s+/i.test(followUpResponse)) { break; }
@@ -901,67 +801,21 @@ export class LocalLLMChatAgent extends Disposable {
 						terminalOutputs.push({ command, output: outputText });
 					}
 				} else if (filePath && (type === 'create' || type === 'overwrite')) {
-					const parameters = { filePath, content, actionType: type, rootUri: rootUri.toJSON() };
-					const verb = type === 'overwrite' ? 'Overwriting' : 'Creating';
-
-					// Emit tool invocation progress to the chat UI
+					const fileUri = URI.joinPath(rootUri, filePath);
 					progress([{
-						kind: 'externalToolInvocationUpdate',
-						toolCallId,
-						toolName: `${verb} file`,
-						isComplete: false,
-						invocationMessage: `${verb} ${filePath}...`
-					}]);
-
-					// Dispatch as a create/overwrite file tool invocation
-					await this.toolsService.invokeTool(
-						{
-							callId: toolCallId,
-							toolId: LocalLLMCreateFileToolId,
-							parameters,
-							context: { sessionResource: request.sessionResource },
-						},
-						countTokens,
-						token,
-					);
-
-					// Signal completion to the UI
-					progress([{
-						kind: 'externalToolInvocationUpdate',
-						toolCallId,
-						toolName: `${verb} file`,
-						isComplete: true
+						kind: 'textEdit',
+						uri: fileUri,
+						edits: [{
+							range: { startLineNumber: 1, startColumn: 1, endLineNumber: Number.MAX_SAFE_INTEGER, endColumn: 1 },
+							text: content,
+						}],
+						done: true,
 					}]);
 				} else if (filePath && type === 'delete') {
-					const parameters = { filePath, rootUri: rootUri.toJSON() };
-
-					// Emit tool invocation progress to the chat UI
+					const fileUri = URI.joinPath(rootUri, filePath);
 					progress([{
-						kind: 'externalToolInvocationUpdate',
-						toolCallId,
-						toolName: 'Delete file',
-						isComplete: false,
-						invocationMessage: `Deleting ${filePath}...`
-					}]);
-
-					// Dispatch as a delete file tool invocation
-					await this.toolsService.invokeTool(
-						{
-							callId: toolCallId,
-							toolId: LocalLLMDeleteFileToolId,
-							parameters,
-							context: { sessionResource: request.sessionResource },
-						},
-						countTokens,
-						token,
-					);
-
-					// Signal completion to the UI
-					progress([{
-						kind: 'externalToolInvocationUpdate',
-						toolCallId,
-						toolName: 'Delete file',
-						isComplete: true
+						kind: 'workspaceEdit',
+						edits: [{ oldResource: fileUri }],
 					}]);
 				}
 			} catch (err) {
@@ -970,6 +824,24 @@ export class LocalLLMChatAgent extends Disposable {
 		}
 
 		return terminalOutputs;
+	}
+
+	private buildFileActionSummary(fullResponse: string): string | null {
+		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?[^>]*(?:>[\s\S]*?<\/file_action>|\/\>)/g;
+		const actions: string[] = [];
+		let match;
+		while ((match = regex.exec(fullResponse)) !== null) {
+			const type = match[1];
+			const filePath = match[2];
+			if (filePath && (type === 'create' || type === 'overwrite')) {
+				const verb = type === 'create' ? 'Created' : 'Modified';
+				actions.push(`- ${verb} \`${filePath}\``);
+			} else if (filePath && type === 'delete') {
+				actions.push(`- Deleted \`${filePath}\``);
+			}
+		}
+		if (actions.length === 0) { return null; }
+		return `\n\n**Changes made:**\n${actions.join('\n')}\n`;
 	}
 
 	// ========================================================================
@@ -1085,5 +957,146 @@ export class LocalLLMChatAgent extends Disposable {
 			const content = await this.fileService.readFile(uri);
 			return `--- ${label || basename(uri)} (${uri.fsPath}) ---\n${content.value.toString()}`;
 		} catch { return undefined; }
+	}
+
+	// ========================================================================
+	// Stream Parser Helper
+	// ========================================================================
+
+	private async streamAndParseResponse(
+		messages: LLMChatMessage[],
+		token: CancellationToken,
+		selectedModel: string | undefined,
+		progress: (progress: IChatProgress[]) => void
+	): Promise<{ totalLength: number; fullResponse: string }> {
+		let totalLength = 0;
+		let inThought = false;
+		let currentBuffer = '';
+		let fullResponse = '';
+
+		const stripFileActionTags = LocalLLMChatAgent.stripFileActionTags;
+
+		for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
+			if (token.isCancellationRequested) {
+				break;
+			}
+			totalLength += chunk.length;
+			currentBuffer += chunk;
+			fullResponse += chunk;
+
+			this._logService.trace(`[LocalLLM Agent] Received chunk: ${JSON.stringify(chunk)}`);
+
+			while (currentBuffer.length > 0) {
+				const lowerBuffer = currentBuffer.toLowerCase();
+
+				if (!inThought) {
+					const thoughtIdx = lowerBuffer.indexOf('<thought>');
+					const thinkIdx = lowerBuffer.indexOf('<think>');
+					let startIdx = -1;
+					let tagLength = 0;
+					if (thoughtIdx !== -1 && (thinkIdx === -1 || thoughtIdx < thinkIdx)) {
+						startIdx = thoughtIdx;
+						tagLength = 9;
+					} else if (thinkIdx !== -1) {
+						startIdx = thinkIdx;
+						tagLength = 7;
+					}
+
+					const fileActionIdx = lowerBuffer.indexOf('<file_action');
+
+					if (startIdx !== -1 && (fileActionIdx === -1 || startIdx <= fileActionIdx)) {
+						if (startIdx > 0) {
+							const beforeThought = stripFileActionTags(currentBuffer.substring(0, startIdx));
+							if (beforeThought.length > 0) {
+								progress([{ kind: 'markdownContent', content: new MarkdownString(beforeThought) }]);
+							}
+						}
+						inThought = true;
+						currentBuffer = currentBuffer.substring(startIdx + tagLength);
+					} else if (fileActionIdx !== -1) {
+						if (fileActionIdx > 0) {
+							const beforeAction = currentBuffer.substring(0, fileActionIdx);
+							if (beforeAction.trim().length > 0) {
+								progress([{ kind: 'markdownContent', content: new MarkdownString(beforeAction) }]);
+							}
+							currentBuffer = currentBuffer.substring(fileActionIdx);
+							continue;
+						}
+						const openTagEndIdx = currentBuffer.indexOf('>', fileActionIdx);
+						if (openTagEndIdx !== -1) {
+							const isSelfClosing = currentBuffer.charAt(openTagEndIdx - 1) === '/';
+							if (isSelfClosing) {
+								currentBuffer = currentBuffer.substring(openTagEndIdx + 1);
+							} else {
+								const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', openTagEndIdx);
+								if (pairedCloseIdx !== -1) {
+									currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
+								} else {
+									break;
+								}
+							}
+						} else {
+							break;
+						}
+					} else {
+						const safeLength = Math.max(0, currentBuffer.length - 15);
+						if (safeLength > 0) {
+							const safeText = stripFileActionTags(currentBuffer.substring(0, safeLength));
+							if (safeText.length > 0) {
+								progress([{ kind: 'markdownContent', content: new MarkdownString(safeText) }]);
+							}
+							currentBuffer = currentBuffer.substring(safeLength);
+						}
+						break;
+					}
+				} else {
+					const endThoughtIdx = lowerBuffer.indexOf('</thought>');
+					const endThinkIdx = lowerBuffer.indexOf('</think>');
+					let endIdx = -1;
+					let endTagLength = 0;
+
+					if (endThoughtIdx !== -1 && (endThinkIdx === -1 || endThoughtIdx < endThinkIdx)) {
+						endIdx = endThoughtIdx;
+						endTagLength = 10;
+					} else if (endThinkIdx !== -1) {
+						endIdx = endThinkIdx;
+						endTagLength = 8;
+					}
+
+					if (endIdx !== -1) {
+						if (endIdx > 0) {
+							const thoughtText = currentBuffer.substring(0, endIdx);
+							progress([{ kind: 'thinking', value: thoughtText }]);
+							this._logService.debug(`[LocalLLM Thought] ${thoughtText}`);
+						}
+						inThought = false;
+						currentBuffer = currentBuffer.substring(endIdx + endTagLength);
+					} else {
+						const safeLength = Math.max(0, currentBuffer.length - 11);
+						if (safeLength > 0) {
+							const thoughtChunk = currentBuffer.substring(0, safeLength);
+							progress([{ kind: 'thinking', value: thoughtChunk }]);
+							this._logService.debug(`[LocalLLM Thought] ${thoughtChunk}`);
+							currentBuffer = currentBuffer.substring(safeLength);
+						}
+						break;
+					}
+				}
+			}
+		}
+
+		if (currentBuffer.length > 0) {
+			if (inThought) {
+				progress([{ kind: 'thinking', value: currentBuffer }]);
+				this._logService.debug(`[LocalLLM Thought] ${currentBuffer}`);
+			} else {
+				const cleaned = stripFileActionTags(currentBuffer);
+				if (cleaned.length > 0) {
+					progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
+				}
+			}
+		}
+
+		return { totalLength, fullResponse };
 	}
 }
