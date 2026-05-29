@@ -16,7 +16,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { ChatAgentLocation, ChatModeKind } from '../../common/constants.js';
 import { IChatAgentData, IChatAgentHistoryEntry, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../common/participants/chatAgents.js';
-import { IChatFollowup, IChatProgress } from '../../common/chatService/chatService.js';
+import { ChatResponseReferencePartStatusKind, IChatFollowup, IChatProgress } from '../../common/chatService/chatService.js';
 import { LLMChatMessage, LocalLLMProvider } from './localLLMProvider.js';
 import { IChatRequestVariableEntry, isImplicitVariableEntry } from '../../common/attachments/chatVariableEntries.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
@@ -415,8 +415,9 @@ export class LocalLLMChatAgent extends Disposable {
 	// System Prompt
 	// ========================================================================
 
-	private async buildSystemPrompt(userMessage: string): Promise<string> {
+	private async buildSystemPrompt(userMessage: string): Promise<{ prompt: string; contextFileUris: URI[] }> {
 		const smartEnabled = this.configurationService.getValue<boolean>('localLLM.smartContext.enabled') !== false;
+		const contextFileUris: URI[] = [];
 
 		const parts: string[] = [
 			'You are a helpful AI coding assistant integrated directly into the Dark Matter IDE.',
@@ -449,13 +450,19 @@ export class LocalLLMChatAgent extends Disposable {
 				parts.push('');
 			}
 
-			// Relevant file summaries
+			// Relevant file summaries — also collect URIs for reference pills
 			if (relevantFiles.length > 0) {
+				const workspace = this.workspaceService.getWorkspace();
+				const rootUri = workspace.folders.length > 0 ? workspace.folders[0].uri : undefined;
+
 				parts.push(`=== RELEVANT FILES (${relevantFiles.length} most relevant) ===`);
 				for (const file of relevantFiles) {
 					parts.push(`**${file.relativePath}**: ${file.summary}`);
 					if (file.keyExports.length > 0) {
 						parts.push(`  Exports: ${file.keyExports.join(', ')}`);
+					}
+					if (rootUri) {
+						contextFileUris.push(URI.joinPath(rootUri, file.relativePath));
 					}
 				}
 				parts.push('');
@@ -486,9 +493,10 @@ export class LocalLLMChatAgent extends Disposable {
 			parts.push('');
 			parts.push(`=== CURRENTLY ACTIVE FILE IN EDITOR ===`);
 			parts.push(`Path: ${activeEditor.resource.fsPath}`);
+			contextFileUris.push(activeEditor.resource);
 		}
 
-		return parts.join('\n');
+		return { prompt: parts.join('\n'), contextFileUris };
 	}
 
 	// ========================================================================
@@ -556,9 +564,14 @@ export class LocalLLMChatAgent extends Disposable {
 		const messages: LLMChatMessage[] = [];
 
 		// System prompt — uses smart context (chunk index + memory) or legacy fallback
-		const systemPrompt = await this.buildSystemPrompt(request.message);
+		const { prompt: systemPrompt, contextFileUris } = await this.buildSystemPrompt(request.message);
 		this._logService.info(`[LocalLLM] System prompt size: ${Math.round(systemPrompt.length / 1024)}KB`);
 		messages.push({ role: 'system', content: systemPrompt });
+
+		// Emit file reference pills for files the agent analyzed
+		for (const fileUri of contextFileUris) {
+			progress([{ kind: 'reference', reference: fileUri }]);
+		}
 
 		// Conversation history — use compactor if enabled
 		const maxContextWindow = this.configurationService.getValue<number>('localLLM.maxContextWindow') || 131072;
@@ -601,6 +614,12 @@ export class LocalLLMChatAgent extends Disposable {
 					const content = await this.resolveVariableContent(variable);
 					if (content) {
 						contextParts.push(content);
+						// Emit a reference pill for attached file/directory variables
+						if (variable.value && URI.isUri(variable.value)) {
+							progress([{ kind: 'reference', reference: variable.value }]);
+						} else if (isLocation(variable.value)) {
+							progress([{ kind: 'reference', reference: variable.value }]);
+						}
 					}
 				} catch (err) {
 					this._logService.warn(`[LocalLLM] Failed to resolve variable ${variable.name}: ${err}`);
@@ -673,12 +692,6 @@ export class LocalLLMChatAgent extends Disposable {
 
 			while (depth < LocalLLMChatAgent.MAX_AGENT_LOOP_DEPTH) {
 				const terminalOutputs = await this.executeAgentActions(responseToProcess, request, progress, token);
-
-				// Emit a summary of file operations performed
-				const fileActionSummary = this.buildFileActionSummary(responseToProcess);
-				if (fileActionSummary) {
-					progress([{ kind: 'markdownContent', content: new MarkdownString(fileActionSummary) }]);
-				}
 
 				if (terminalOutputs.length === 0) {
 					break;
@@ -802,6 +815,37 @@ export class LocalLLMChatAgent extends Disposable {
 					}
 				} else if (filePath && (type === 'create' || type === 'overwrite')) {
 					const fileUri = URI.joinPath(rootUri, filePath);
+					
+					// Generate a unique reference ID for the inline link
+					const refId = `file_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+					const actionVerb = type === 'create' ? 'Created' : 'Edited';
+					const fileName = filePath.split('/').pop() || filePath;
+					
+					// Emit file reference pill BEFORE the textEdit so it is visible while "working"
+					progress([{
+						kind: 'reference',
+						reference: fileUri,
+						options: {
+							status: {
+								description: type === 'create' ? 'Created' : 'Modified',
+								kind: ChatResponseReferencePartStatusKind.Complete,
+							}
+						}
+					}]);
+					
+					// Emit an inline markdown pill for the chat stream (renders with icon)
+					progress([{ 
+						kind: 'markdownContent', 
+						content: new MarkdownString(`- ${actionVerb} [${fileName}](http://_vscodecontentref_/${refId})\n`),
+						inlineReferences: {
+							[refId]: {
+								kind: 'inlineReference',
+								inlineReference: fileUri,
+								name: fileName
+							}
+						}
+					}]);
+
 					progress([{
 						kind: 'textEdit',
 						uri: fileUri,
@@ -813,6 +857,35 @@ export class LocalLLMChatAgent extends Disposable {
 					}]);
 				} else if (filePath && type === 'delete') {
 					const fileUri = URI.joinPath(rootUri, filePath);
+					
+					const refId = `file_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+					const fileName = filePath.split('/').pop() || filePath;
+					
+					// Emit file reference pill BEFORE the workspaceEdit so it is visible while "working"
+					progress([{
+						kind: 'reference',
+						reference: fileUri,
+						options: {
+							status: {
+								description: 'Deleted',
+								kind: ChatResponseReferencePartStatusKind.Omitted,
+							},
+							isDeletion: true,
+						}
+					}]);
+					
+					progress([{ 
+						kind: 'markdownContent', 
+						content: new MarkdownString(`- Deleted [${fileName}](http://_vscodecontentref_/${refId})\n`),
+						inlineReferences: {
+							[refId]: {
+								kind: 'inlineReference',
+								inlineReference: fileUri,
+								name: fileName
+							}
+						}
+					}]);
+
 					progress([{
 						kind: 'workspaceEdit',
 						edits: [{ oldResource: fileUri }],
@@ -826,23 +899,7 @@ export class LocalLLMChatAgent extends Disposable {
 		return terminalOutputs;
 	}
 
-	private buildFileActionSummary(fullResponse: string): string | null {
-		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?[^>]*(?:>[\s\S]*?<\/file_action>|\/\>)/g;
-		const actions: string[] = [];
-		let match;
-		while ((match = regex.exec(fullResponse)) !== null) {
-			const type = match[1];
-			const filePath = match[2];
-			if (filePath && (type === 'create' || type === 'overwrite')) {
-				const verb = type === 'create' ? 'Created' : 'Modified';
-				actions.push(`- ${verb} \`${filePath}\``);
-			} else if (filePath && type === 'delete') {
-				actions.push(`- Deleted \`${filePath}\``);
-			}
-		}
-		if (actions.length === 0) { return null; }
-		return `\n\n**Changes made:**\n${actions.join('\n')}\n`;
-	}
+
 
 	// ========================================================================
 	// Variable Resolution
