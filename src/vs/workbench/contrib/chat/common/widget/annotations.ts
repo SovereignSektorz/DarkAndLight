@@ -60,7 +60,10 @@ export function annotateSpecialMarkdownContent(response: Iterable<IChatProgressR
 		} else if (item.kind === 'markdownContent' && previousItem?.kind === 'markdownContent') {
 			if (canMergeMarkdownStrings(previousItem.content, item.content)) {
 				const merged = appendMarkdownString(previousItem.content, item.content);
-				result[previousItemIndex] = { ...previousItem, content: merged };
+				const mergedInlineRefs = (previousItem.inlineReferences || item.inlineReferences)
+					? { ...previousItem.inlineReferences, ...item.inlineReferences }
+					: undefined;
+				result[previousItemIndex] = { ...previousItem, content: merged, inlineReferences: mergedInlineRefs };
 			} else if (previousItem.inlineReferences && isContentRefOnly(previousItem.content.value)) {
 				// The previous item is a standalone inline reference whose MarkdownString
 				// was synthesized with default properties that don't match the incoming

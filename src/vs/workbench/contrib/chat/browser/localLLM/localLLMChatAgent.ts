@@ -26,7 +26,7 @@ import { isLocation } from '../../../../../editor/common/languages.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 import { ILanguageModelToolsService, CountTokensCallback } from '../../common/tools/languageModelToolsService.js';
-import { LocalLLMRunCommandToolId } from './localLLMTools.js';
+import { LocalLLMRunCommandToolId, LocalLLMCreateFileToolId, LocalLLMDeleteFileToolId, LocalLLMViewFileToolId, LocalLLMGrepToolId, LocalLLMGlobToolId, LocalLLMWebFetchToolId } from './localLLMTools.js';
 import { WorkspaceChunkIndex, RelevanceContext } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
@@ -87,16 +87,17 @@ export class LocalLLMChatAgent extends Disposable {
 	/** Max iterations for the agentic follow-up loop */
 	private static readonly MAX_AGENT_LOOP_DEPTH = 3;
 
-	/** Strip <file_action> and <thought> tags (and their full content) from text */
-	private static stripFileActionTags(text: string): string {
-		// Remove self-closing: <file_action ... />
+	/** Strip <file_action>, <tool_call>, and <thought> tags (and their full content) from text */
+	private static stripActionTags(text: string): string {
+		// Remove self-closing: <file_action ... /> and <tool_call ... />
 		let cleaned = text.replace(/<file_action\b[^>]*\/>/gi, '');
+		cleaned = cleaned.replace(/<tool_call\b[^>]*\/>/gi, '');
 		// Remove paired tags WITH content: <file_action ...>...</file_action>
-		// Must use greedy [\s\S]* to reliably match large multi-line file content
 		cleaned = cleaned.replace(/<file_action\b[^>]*>[\s\S]*?<\/file_action>/gi, '');
-		// Remove stray opening/closing tags that lost their pair
+		// Remove stray tags
 		cleaned = cleaned.replace(/<\/?file_action[^>]*>/gi, '');
-		// Remove thought blocks: <thought>...</thought>
+		cleaned = cleaned.replace(/<\/?tool_call[^>]*>/gi, '');
+		// Remove thought/think blocks
 		cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, '');
 		cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '');
 		// Remove stray thought tags
@@ -135,9 +136,22 @@ export class LocalLLMChatAgent extends Disposable {
 				return `[${type} action]`;
 			}
 		);
+		// Replace tool_call tags: <tool_call type="viewFile" path="..." />
+		summary = summary.replace(
+			/<tool_call\b([^>]*)\/>/gi,
+			(_match, attrs: string) => {
+				const type = (attrs.match(/type="([^"]*)"/) ?? [])[1] ?? 'tool';
+				const path = (attrs.match(/path="([^"]*)"/) ?? [])[1];
+				const pattern = (attrs.match(/pattern="([^"]*)"/) ?? [])[1];
+				const url = (attrs.match(/url="([^"]*)"/) ?? [])[1];
+				const target = path || pattern || url || '';
+				return `[${type}: ${target}]`;
+			}
+		);
 		// Strip stray tags, thought blocks, and collapse whitespace
 		summary = summary
 			.replace(/<\/?file_action[^>]*>/gi, '')
+			.replace(/<\/?tool_call[^>]*>/gi, '')
 			.replace(/<thought>[\s\S]*?<\/thought>/gi, '')
 			.replace(/<\/?thought>/gi, '')
 			.replace(/\s+/g, ' ')
@@ -223,7 +237,7 @@ export class LocalLLMChatAgent extends Disposable {
 				extensionDisplayName: 'Dark Matter Ollama',
 				publisherDisplayName: 'Dark Matter',
 				isDefault: true,
-				isCore: false,
+				isCore: true,
 				isDynamic: true,
 				metadata: {
 					sampleRequest: 'Explain this code',
@@ -421,9 +435,34 @@ export class LocalLLMChatAgent extends Disposable {
 
 		const parts: string[] = [
 			'You are a helpful AI coding assistant integrated directly into the Dark Matter IDE.',
-			'You have FULL ACCESS to the user\'s entire workspace.',
-			'Help with code, debugging, architecture, and general programming questions.',
+			'You have FULL ACCESS to the user\'s entire workspace and a set of powerful tools.',
+			'ALWAYS use your tools to take action — do NOT just describe steps or give instructions.',
+			'When the user asks you to create, modify, or delete files, DO IT using your tools.',
+			'When you need to understand code before making changes, READ the files first using your tools.',
 			'Format your responses with markdown when appropriate.',
+			'',
+			'=== YOUR TOOLS ===',
+			'You MUST use these tools by embedding XML tags directly in your response:',
+			'',
+			'FILE WRITE OPERATIONS (these modify the workspace):',
+			'  <file_action type="create" path="relative/path">file content here</file_action>',
+			'  <file_action type="overwrite" path="relative/path">new full content</file_action>',
+			'  <file_action type="delete" path="relative/path" />',
+			'  <file_action type="runCommand" command="npm test" />',
+			'',
+			'READ/SEARCH OPERATIONS (results are fed back to you automatically):',
+			'  <tool_call type="viewFile" path="relative/path" />',
+			'  <tool_call type="viewFile" path="relative/path" startLine="10" endLine="50" />',
+			'  <tool_call type="grep" pattern="searchPattern" />',
+			'  <tool_call type="grep" pattern="TODO" include="*.ts" />',
+			'  <tool_call type="glob" pattern="**/*.test.ts" />',
+			'  <tool_call type="webFetch" url="https://example.com" />',
+			'',
+			'CRITICAL RULES:',
+			'- When the user asks you to create a file, USE <file_action type="create"> — do NOT just show code.',
+			'- When you need to read a file before editing it, USE <tool_call type="viewFile"> first.',
+			'- When you need to find something in the codebase, USE <tool_call type="grep"> or <tool_call type="glob">.',
+			'- Tool results are automatically provided back to you so you can continue working.',
 			'',
 		];
 
@@ -495,6 +534,16 @@ export class LocalLLMChatAgent extends Disposable {
 			parts.push(`Path: ${activeEditor.resource.fsPath}`);
 			contextFileUris.push(activeEditor.resource);
 		}
+
+		// Tool reminder at the end of the system prompt (combats "lost in the middle" problem
+		// with local LLMs — they pay most attention to the start and end of long prompts)
+		parts.push('');
+		parts.push('=== REMINDER: YOU HAVE TOOLS — USE THEM ===');
+		parts.push('Do NOT just describe what to do. Take action with your tools:');
+		parts.push('- To create/edit files: <file_action type="create" path="...">content</file_action>');
+		parts.push('- To read files: <tool_call type="viewFile" path="..." />');
+		parts.push('- To search code: <tool_call type="grep" pattern="..." />');
+		parts.push('- To run commands: <file_action type="runCommand" command="..." />');
 
 		return { prompt: parts.join('\n'), contextFileUris };
 	}
@@ -662,15 +711,11 @@ export class LocalLLMChatAgent extends Disposable {
 				this._agentMemory.updateFile('summary', summaryMatch[1].trim()).catch(() => { });
 			}
 
-			// Auto-log the AI response and auto-update summary — no special code blocks needed.
-			// Use summarizeResponseForMemory so file contents are replaced with compact
-			// descriptions (e.g. "[Created file: path]") rather than raw code that would
-			// confuse the model into thinking files are already in context.
+			// Auto-log the AI response and auto-update summary
 			const responseSummary = LocalLLMChatAgent.summarizeResponseForMemory(fullResponse);
 			this._agentMemory.logActivity(`[Agent] ${responseSummary}`).catch(() => { });
 
-			// Build a lightweight summarizer callback backed by the current local LLM model.
-			// Used by AgentMemory when the summary file exceeds the size limit.
+			// Build a lightweight summarizer callback
 			const summarizer = async (prompt: string): Promise<string> => {
 				const chunks: string[] = [];
 				const summaryMessages = [
@@ -686,36 +731,39 @@ export class LocalLLMChatAgent extends Disposable {
 			this._agentMemory.appendSummaryEntry(userMessageForLog, responseSummary, summarizer).catch(() => { });
 
 			// Execute agent actions via the tool invocation pipeline
-			// Each action is dispatched as a proper tool invocation with native confirmation UI
 			let depth = 0;
 			let responseToProcess = fullResponse;
 
 			while (depth < LocalLLMChatAgent.MAX_AGENT_LOOP_DEPTH) {
-				const terminalOutputs = await this.executeAgentActions(responseToProcess, request, progress, token);
+				const actionResults = await this.executeAgentActions(responseToProcess, request, progress, token);
 
-				if (terminalOutputs.length === 0) {
+				if (actionResults.length === 0) {
 					break;
 				}
 
 				depth++;
 				this._logService.info(`[LocalLLM] Agentic follow-up loop iteration ${depth}`);
 
-				const outputContext = terminalOutputs.map(t =>
-					`Command: \`${t.command}\`\n<terminal_output>\n${t.output}\n</terminal_output>`
-				).join('\n\n');
+				const outputContext = actionResults.map(t => {
+					if (t.type === 'terminal') {
+						return `Command: \`${t.label}\`\n<terminal_output>\n${t.output}\n</terminal_output>`;
+					} else {
+						return `Tool: ${t.label}\n<tool_result>\n${t.output}\n</tool_result>`;
+					}
+				}).join('\n\n');
 
-				const followUpMessage = `Terminal output from the commands you just ran:\n\n${outputContext}\n\nNow provide a brief, fresh summary of the results for the user. Do NOT repeat or echo anything from before. Start your response with the findings.`;
+				const labelList = actionResults.map(t => t.label).join(', ');
+				const followUpMessage = `Results from your tool calls:\n\n${outputContext}\n\nAnalyze the results and continue. You may use additional tools if needed, or provide your response to the user.`;
 
-				const commandList = terminalOutputs.map(t => t.command).join(', ');
-				messages.push({ role: 'assistant', content: `[Executed: ${commandList}]` });
+				messages.push({ role: 'assistant', content: `[Executed: ${labelList}]` });
 				messages.push({ role: 'user', content: followUpMessage });
 
-				progress([{ kind: 'progressMessage', content: new MarkdownString('Analyzing terminal output...') }]);
+				progress([{ kind: 'progressMessage', content: new MarkdownString('Analyzing results...') }]);
 
 				const { fullResponse: followUpResponse } = await this.streamAndParseResponse(messages, token, selectedModel, progress);
 
 				responseToProcess = followUpResponse;
-				if (!/<file_action\s+/i.test(followUpResponse)) { break; }
+				if (!/(?:<file_action\s+|<tool_call\s+)/i.test(followUpResponse)) { break; }
 			}
 
 			return {};
@@ -740,21 +788,17 @@ export class LocalLLMChatAgent extends Disposable {
 	// ========================================================================
 
 	/**
-	 * Parse <file_action> tags from the AI response and dispatch each
+	 * Parse <file_action> and <tool_call> tags from the AI response and dispatch each
 	 * as a tool invocation through ILanguageModelToolsService.
-	 *
-	 * This gives us the Copilot-style confirmation UI:
-	 *   Streaming → WaitingForConfirmation → Executing → Completed
+	 * Returns results that should be fed back to the LLM for follow-up processing.
 	 */
 	private async executeAgentActions(
 		fullResponse: string,
 		request: IChatAgentRequest,
 		progress: (progress: IChatProgress[]) => void,
 		token: CancellationToken,
-	): Promise<{ command: string; output: string }[]> {
-		const regex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?(?:\s+command="([^"]+)")?\s*(?:>([\s\S]*?)<\/file_action>|\/\>)/g;
-		let match;
-		const terminalOutputs: { command: string; output: string }[] = [];
+	): Promise<{ type: 'terminal' | 'tool'; label: string; output: string }[]> {
+		const actionResults: { type: 'terminal' | 'tool'; label: string; output: string }[] = [];
 
 		const workspace = this.workspaceService.getWorkspace();
 		if (workspace.folders.length === 0) {
@@ -765,7 +809,19 @@ export class LocalLLMChatAgent extends Disposable {
 		// Simple token counter for the tool API
 		const countTokens: CountTokensCallback = async (input: string) => Math.ceil(input.length / 4);
 
-		while ((match = regex.exec(fullResponse)) !== null) {
+		// Helper to extract text from tool results
+		const extractToolText = (result: import('../../common/tools/languageModelToolsService.js').IToolResult): string => {
+			return result.content
+				.filter((p): p is { kind: 'text'; value: string } => p.kind === 'text')
+				.map(p => p.value)
+				.join('\n');
+		};
+
+		// --- Parse <file_action> tags ---
+		const fileActionRegex = /<file_action\s+type="([^"]+)"(?:\s+path="([^"]+)")?(?:\s+command="([^"]+)")?\s*(?:>([\s\S]*?)<\/file_action>|\/\>)/g;
+		let match;
+
+		while ((match = fileActionRegex.exec(fullResponse)) !== null) {
 			const type = match[1];
 			const filePath = match[2];
 			const command = match[3];
@@ -775,7 +831,6 @@ export class LocalLLMChatAgent extends Disposable {
 				const toolCallId = `localLLM-${type}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
 				if (type === 'runCommand' && command) {
-					// Emit tool invocation progress to the chat UI
 					progress([{
 						kind: 'externalToolInvocationUpdate',
 						toolCallId,
@@ -784,7 +839,6 @@ export class LocalLLMChatAgent extends Disposable {
 						invocationMessage: `Running command: ${command}`
 					}]);
 
-					// Dispatch as a terminal command tool invocation
 					const result = await this.toolsService.invokeTool(
 						{
 							callId: toolCallId,
@@ -796,7 +850,6 @@ export class LocalLLMChatAgent extends Disposable {
 						token,
 					);
 
-					// Signal completion to the UI
 					progress([{
 						kind: 'externalToolInvocationUpdate',
 						toolCallId,
@@ -804,24 +857,14 @@ export class LocalLLMChatAgent extends Disposable {
 						isComplete: true
 					}]);
 
-					// Extract terminal output from the tool result
-					const outputText = result.content
-						.filter((p): p is { kind: 'text'; value: string } => p.kind === 'text')
-						.map(p => p.value)
-						.join('\n');
-
+					const outputText = extractToolText(result);
 					if (outputText.length > 0 && !outputText.includes('(no output)')) {
-						terminalOutputs.push({ command, output: outputText });
+						actionResults.push({ type: 'terminal', label: command, output: outputText });
 					}
 				} else if (filePath && (type === 'create' || type === 'overwrite')) {
 					const fileUri = URI.joinPath(rootUri, filePath);
-					
-					// Generate a unique reference ID for the inline link
-					const refId = `file_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-					const actionVerb = type === 'create' ? 'Created' : 'Edited';
-					const fileName = filePath.split('/').pop() || filePath;
-					
-					// Emit file reference pill BEFORE the textEdit so it is visible while "working"
+
+					// Emit file reference pill
 					progress([{
 						kind: 'reference',
 						reference: fileUri,
@@ -832,20 +875,35 @@ export class LocalLLMChatAgent extends Disposable {
 							}
 						}
 					}]);
-					
-					// Emit an inline markdown pill for the chat stream (renders with icon)
-					progress([{ 
-						kind: 'markdownContent', 
-						content: new MarkdownString(`- ${actionVerb} [${fileName}](http://_vscodecontentref_/${refId})\n`),
-						inlineReferences: {
-							[refId]: {
-								kind: 'inlineReference',
-								inlineReference: fileUri,
-								name: fileName
-							}
-						}
+
+					// Dispatch through tool pipeline
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: type === 'create' ? 'Create File' : 'Edit File',
+						isComplete: false,
+						invocationMessage: `${type === 'create' ? 'Creating' : 'Editing'} ${filePath}`
 					}]);
 
+					await this.toolsService.invokeTool(
+						{
+							callId: toolCallId,
+							toolId: LocalLLMCreateFileToolId,
+							parameters: { filePath, content, actionType: type, rootUri },
+							context: { sessionResource: request.sessionResource },
+						},
+						countTokens,
+						token,
+					);
+
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: type === 'create' ? 'Create File' : 'Edit File',
+						isComplete: true
+					}]);
+
+					// Also emit textEdit for the editing session tracking
 					progress([{
 						kind: 'textEdit',
 						uri: fileUri,
@@ -857,11 +915,7 @@ export class LocalLLMChatAgent extends Disposable {
 					}]);
 				} else if (filePath && type === 'delete') {
 					const fileUri = URI.joinPath(rootUri, filePath);
-					
-					const refId = `file_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-					const fileName = filePath.split('/').pop() || filePath;
-					
-					// Emit file reference pill BEFORE the workspaceEdit so it is visible while "working"
+
 					progress([{
 						kind: 'reference',
 						reference: fileUri,
@@ -873,17 +927,31 @@ export class LocalLLMChatAgent extends Disposable {
 							isDeletion: true,
 						}
 					}]);
-					
-					progress([{ 
-						kind: 'markdownContent', 
-						content: new MarkdownString(`- Deleted [${fileName}](http://_vscodecontentref_/${refId})\n`),
-						inlineReferences: {
-							[refId]: {
-								kind: 'inlineReference',
-								inlineReference: fileUri,
-								name: fileName
-							}
-						}
+
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Delete File',
+						isComplete: false,
+						invocationMessage: `Deleting ${filePath}`
+					}]);
+
+					await this.toolsService.invokeTool(
+						{
+							callId: toolCallId,
+							toolId: LocalLLMDeleteFileToolId,
+							parameters: { filePath, rootUri },
+							context: { sessionResource: request.sessionResource },
+						},
+						countTokens,
+						token,
+					);
+
+					progress([{
+						kind: 'externalToolInvocationUpdate',
+						toolCallId,
+						toolName: 'Delete File',
+						isComplete: true
 					}]);
 
 					progress([{
@@ -896,10 +964,104 @@ export class LocalLLMChatAgent extends Disposable {
 			}
 		}
 
-		return terminalOutputs;
+		// --- Parse <tool_call> tags (read/search tools that return data) ---
+		const toolCallRegex = /<tool_call\s+type="([^"]+)"([^>]*?)\s*\/>/g;
+		while ((match = toolCallRegex.exec(fullResponse)) !== null) {
+			const toolType = match[1];
+			const attrsStr = match[2];
+
+			// Parse attributes from the tag
+			const attrs: Record<string, string> = {};
+			const attrRegex = /(\w+)="([^"]*)"/g;
+			let attrMatch;
+			while ((attrMatch = attrRegex.exec(attrsStr)) !== null) {
+				attrs[attrMatch[1]] = attrMatch[2];
+			}
+
+			try {
+				const toolCallId = `localLLM-${toolType}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+				let toolId: string;
+				let toolName: string;
+				let parameters: Record<string, unknown>;
+
+				switch (toolType) {
+					case 'viewFile':
+						toolId = LocalLLMViewFileToolId;
+						toolName = 'View File';
+						parameters = {
+							path: attrs.path,
+							startLine: attrs.startLine ? parseInt(attrs.startLine) : undefined,
+							endLine: attrs.endLine ? parseInt(attrs.endLine) : undefined,
+							rootUri,
+						};
+						break;
+					case 'grep':
+						toolId = LocalLLMGrepToolId;
+						toolName = 'Search';
+						parameters = {
+							pattern: attrs.pattern,
+							path: attrs.path,
+							include: attrs.include,
+						};
+						break;
+					case 'glob':
+						toolId = LocalLLMGlobToolId;
+						toolName = 'Find Files';
+						parameters = {
+							pattern: attrs.pattern,
+							path: attrs.path,
+						};
+						break;
+					case 'webFetch':
+						toolId = LocalLLMWebFetchToolId;
+						toolName = 'Fetch Web Page';
+						parameters = {
+							url: attrs.url,
+						};
+						break;
+					default:
+						this._logService.warn(`[LocalLLM] Unknown tool_call type: ${toolType}`);
+						continue;
+				}
+
+				// Show invocation progress
+				const invocationLabel = attrs.path || attrs.pattern || attrs.url || toolType;
+				progress([{
+					kind: 'externalToolInvocationUpdate',
+					toolCallId,
+					toolName,
+					isComplete: false,
+					invocationMessage: `${toolName}: ${invocationLabel}`
+				}]);
+
+				const result = await this.toolsService.invokeTool(
+					{
+						callId: toolCallId,
+						toolId,
+						parameters,
+						context: { sessionResource: request.sessionResource },
+					},
+					countTokens,
+					token,
+				);
+
+				progress([{
+					kind: 'externalToolInvocationUpdate',
+					toolCallId,
+					toolName,
+					isComplete: true
+				}]);
+
+				// Feed result back to the LLM
+				const outputText = extractToolText(result);
+				actionResults.push({ type: 'tool', label: `${toolName}: ${invocationLabel}`, output: outputText });
+			} catch (err) {
+				this._logService.error(`[LocalLLM] Tool call failed for ${toolType}: ${err}`);
+			}
+		}
+
+		return actionResults;
 	}
-
-
 
 	// ========================================================================
 	// Variable Resolution
@@ -1031,7 +1193,7 @@ export class LocalLLMChatAgent extends Disposable {
 		let currentBuffer = '';
 		let fullResponse = '';
 
-		const stripFileActionTags = LocalLLMChatAgent.stripFileActionTags;
+		const stripActionTags = LocalLLMChatAgent.stripActionTags;
 
 		for await (const chunk of this.llmProvider.sendChatRequest(messages, token, selectedModel)) {
 			if (token.isCancellationRequested) {
@@ -1060,45 +1222,66 @@ export class LocalLLMChatAgent extends Disposable {
 					}
 
 					const fileActionIdx = lowerBuffer.indexOf('<file_action');
+					const toolCallIdx = lowerBuffer.indexOf('<tool_call');
+					// Find the earliest action tag
+					let actionIdx = -1;
+					let isToolCall = false;
+					if (fileActionIdx !== -1 && (toolCallIdx === -1 || fileActionIdx <= toolCallIdx)) {
+						actionIdx = fileActionIdx;
+					} else if (toolCallIdx !== -1) {
+						actionIdx = toolCallIdx;
+						isToolCall = true;
+					}
 
-					if (startIdx !== -1 && (fileActionIdx === -1 || startIdx <= fileActionIdx)) {
+					if (startIdx !== -1 && (actionIdx === -1 || startIdx <= actionIdx)) {
 						if (startIdx > 0) {
-							const beforeThought = stripFileActionTags(currentBuffer.substring(0, startIdx));
+							const beforeThought = stripActionTags(currentBuffer.substring(0, startIdx));
 							if (beforeThought.length > 0) {
 								progress([{ kind: 'markdownContent', content: new MarkdownString(beforeThought) }]);
 							}
 						}
 						inThought = true;
 						currentBuffer = currentBuffer.substring(startIdx + tagLength);
-					} else if (fileActionIdx !== -1) {
-						if (fileActionIdx > 0) {
-							const beforeAction = currentBuffer.substring(0, fileActionIdx);
+					} else if (actionIdx !== -1) {
+						if (actionIdx > 0) {
+							const beforeAction = currentBuffer.substring(0, actionIdx);
 							if (beforeAction.trim().length > 0) {
 								progress([{ kind: 'markdownContent', content: new MarkdownString(beforeAction) }]);
 							}
-							currentBuffer = currentBuffer.substring(fileActionIdx);
+							currentBuffer = currentBuffer.substring(actionIdx);
 							continue;
 						}
-						const openTagEndIdx = currentBuffer.indexOf('>', fileActionIdx);
-						if (openTagEndIdx !== -1) {
-							const isSelfClosing = currentBuffer.charAt(openTagEndIdx - 1) === '/';
-							if (isSelfClosing) {
-								currentBuffer = currentBuffer.substring(openTagEndIdx + 1);
+						if (isToolCall) {
+							// tool_call is always self-closing: <tool_call ... />
+							const closingIdx = currentBuffer.indexOf('/>', actionIdx);
+							if (closingIdx !== -1) {
+								currentBuffer = currentBuffer.substring(closingIdx + 2);
 							} else {
-								const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', openTagEndIdx);
-								if (pairedCloseIdx !== -1) {
-									currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
-								} else {
-									break;
-								}
+								break;
 							}
 						} else {
-							break;
+							// file_action: check for self-closing or paired tags
+							const openTagEndIdx = currentBuffer.indexOf('>', actionIdx);
+							if (openTagEndIdx !== -1) {
+								const isSelfClosing = currentBuffer.charAt(openTagEndIdx - 1) === '/';
+								if (isSelfClosing) {
+									currentBuffer = currentBuffer.substring(openTagEndIdx + 1);
+								} else {
+									const pairedCloseIdx = lowerBuffer.indexOf('</file_action>', openTagEndIdx);
+									if (pairedCloseIdx !== -1) {
+										currentBuffer = currentBuffer.substring(pairedCloseIdx + '</file_action>'.length);
+									} else {
+										break;
+									}
+								}
+							} else {
+								break;
+							}
 						}
 					} else {
 						const safeLength = Math.max(0, currentBuffer.length - 15);
 						if (safeLength > 0) {
-							const safeText = stripFileActionTags(currentBuffer.substring(0, safeLength));
+							const safeText = stripActionTags(currentBuffer.substring(0, safeLength));
 							if (safeText.length > 0) {
 								progress([{ kind: 'markdownContent', content: new MarkdownString(safeText) }]);
 							}
@@ -1147,7 +1330,7 @@ export class LocalLLMChatAgent extends Disposable {
 				progress([{ kind: 'thinking', value: currentBuffer }]);
 				this._logService.debug(`[LocalLLM Thought] ${currentBuffer}`);
 			} else {
-				const cleaned = stripFileActionTags(currentBuffer);
+				const cleaned = stripActionTags(currentBuffer);
 				if (cleaned.length > 0) {
 					progress([{ kind: 'markdownContent', content: new MarkdownString(cleaned) }]);
 				}

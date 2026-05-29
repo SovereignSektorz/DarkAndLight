@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { hasKey } from '../../../../base/common/types.js';
+import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
 
 // =============================================================================
@@ -185,21 +186,21 @@ export function getInvocationMessage(toolName: string, displayName: string, para
 		case CopilotToolName.View: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolInvoke.viewFile', "Reading {0}", args.path);
+				return localize('toolInvoke.viewFile', "Reading {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolInvoke.view', "Reading file");
 		}
 		case CopilotToolName.Edit: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolInvoke.editFile', "Editing {0}", args.path);
+				return localize('toolInvoke.editFile', "Editing {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolInvoke.edit', "Editing file");
 		}
 		case CopilotToolName.Write: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolInvoke.writeFile', "Writing to {0}", args.path);
+				return localize('toolInvoke.writeFile', "Writing to {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolInvoke.write', "Writing file");
 		}
@@ -240,21 +241,21 @@ export function getPastTenseMessage(toolName: string, displayName: string, param
 		case CopilotToolName.View: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolComplete.viewFile', "Read {0}", args.path);
+				return localize('toolComplete.viewFile', "Read {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolComplete.view', "Read file");
 		}
 		case CopilotToolName.Edit: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolComplete.editFile', "Edited {0}", args.path);
+				return localize('toolComplete.editFile', "Edited {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolComplete.edit', "Edited file");
 		}
 		case CopilotToolName.Write: {
 			const args = parameters as ICopilotFileToolArgs | undefined;
 			if (args?.path) {
-				return localize('toolComplete.writeFile', "Wrote to {0}", args.path);
+				return localize('toolComplete.writeFile', "Wrote to {0}", `[](${URI.file(args.path).toString()})`);
 			}
 			return localize('toolComplete.write', "Wrote file");
 		}

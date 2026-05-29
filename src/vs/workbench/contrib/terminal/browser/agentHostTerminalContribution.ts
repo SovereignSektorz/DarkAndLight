@@ -37,9 +37,10 @@ export class AgentHostTerminalContribution extends Disposable implements IWorkbe
 	private readonly _registrations = this._register(new DisposableMap<string>());
 	private readonly _usedHosts = new Set<string>();
 
+	private _remoteAgentHostService: IRemoteAgentHostService | undefined;
+	private _agentHostService: IAgentHostService | undefined;
+
 	constructor(
-		@IRemoteAgentHostService private readonly _remoteAgentHostService: IRemoteAgentHostService,
-		@IAgentHostService private readonly _agentHostService: IAgentHostService,
 		@ITerminalProfileService private readonly _terminalProfileService: ITerminalProfileService,
 		@IQuickInputService private readonly _quickInputService: IQuickInputService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
@@ -47,12 +48,25 @@ export class AgentHostTerminalContribution extends Disposable implements IWorkbe
 	) {
 		super();
 
+		this._instantiationService.invokeFunction(accessor => {
+			try {
+				this._remoteAgentHostService = accessor.get(IRemoteAgentHostService);
+			} catch { }
+			try {
+				this._agentHostService = accessor.get(IAgentHostService);
+			} catch { }
+		});
+
 		// React to connection changes
-		this._register(this._remoteAgentHostService.onDidChangeConnections(() => this._reconcile()));
+		if (this._remoteAgentHostService) {
+			this._register(this._remoteAgentHostService.onDidChangeConnections(() => this._reconcile()));
+		}
 
 		// React to local agent host lifecycle
-		this._register(this._agentHostService.onAgentHostStart(() => this._reconcile()));
-		this._register(this._agentHostService.onAgentHostExit(() => this._reconcile()));
+		if (this._agentHostService) {
+			this._register(this._agentHostService.onAgentHostStart(() => this._reconcile()));
+			this._register(this._agentHostService.onAgentHostExit(() => this._reconcile()));
+		}
 
 		// Initial reconciliation
 		this._reconcile();
@@ -113,41 +127,45 @@ export class AgentHostTerminalContribution extends Disposable implements IWorkbe
 		const entries: IAgentHostEntry[] = [];
 
 		// Remote connections
-		for (const info of this._remoteAgentHostService.connections) {
-			if (info.status !== RemoteAgentHostConnectionStatus.Connected) {
-				continue;
-			}
-			const connection = this._remoteAgentHostService.getConnection(info.address);
-			if (!connection) {
-				continue;
-			}
+		if (this._remoteAgentHostService) {
+			for (const info of this._remoteAgentHostService.connections) {
+				if (info.status !== RemoteAgentHostConnectionStatus.Connected) {
+					continue;
+				}
+				const connection = this._remoteAgentHostService.getConnection(info.address);
+				if (!connection) {
+					continue;
+				}
 
-			entries.push({
-				name: info.name || info.address,
-				address: info.address,
-				getConnection: () => this._instantiationService.createInstance(
-					LoggingAgentConnection,
-					connection,
-					`agenthost.${connection.clientId}`,
-					localize('agentHostTerminal.channelRemote', "Agent Host Terminal ({0})", info.address),
-				),
-			});
+				entries.push({
+					name: info.name || info.address,
+					address: info.address,
+					getConnection: () => this._instantiationService.createInstance(
+						LoggingAgentConnection,
+						connection,
+						`agenthost.${connection.clientId}`,
+						localize('agentHostTerminal.channelRemote', "Agent Host Terminal ({0})", info.address),
+					),
+				});
+			}
 		}
 
 		// Local agent host
-		try {
-			entries.push({
-				name: localize('agentHostTerminal.local', "Local"),
-				address: '__local__',
-				getConnection: () => this._instantiationService.createInstance(
-					LoggingAgentConnection,
-					this._agentHostService,
-					`agenthost.${this._agentHostService.clientId}`,
-					localize('agentHostTerminal.channelLocal', "Agent Host Terminal (Local)"),
-				),
-			});
-		} catch {
-			// Local agent host may not be available
+		if (this._agentHostService) {
+			try {
+				entries.push({
+					name: localize('agentHostTerminal.local', "Local"),
+					address: '__local__',
+					getConnection: () => this._instantiationService.createInstance(
+						LoggingAgentConnection,
+						this._agentHostService!,
+						`agenthost.${this._agentHostService!.clientId}`,
+						localize('agentHostTerminal.channelLocal', "Agent Host Terminal (Local)"),
+					),
+				});
+			} catch {
+				// Local agent host may not be available
+			}
 		}
 
 		return entries;

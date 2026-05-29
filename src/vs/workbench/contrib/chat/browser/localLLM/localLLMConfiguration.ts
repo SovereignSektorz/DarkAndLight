@@ -34,6 +34,10 @@ import {
 	LocalLLMCreateFileTool, LocalLLMCreateFileToolData,
 	LocalLLMDeleteFileTool, LocalLLMDeleteFileToolData,
 	LocalLLMRunCommandTool, LocalLLMRunCommandToolData,
+	LocalLLMViewFileTool, LocalLLMViewFileToolData,
+	LocalLLMGrepTool, LocalLLMGrepToolData,
+	LocalLLMGlobTool, LocalLLMGlobToolData,
+	LocalLLMWebFetchTool, LocalLLMWebFetchToolData,
 } from './localLLMTools.js';
 import { ILanguageModelToolsService } from '../../common/tools/languageModelToolsService.js';
 
@@ -273,6 +277,18 @@ export class LocalLLMContribution extends Disposable {
 
 		const runCommandTool = this.instantiationService.createInstance(LocalLLMRunCommandTool);
 		this._register(this.toolsService.registerTool(LocalLLMRunCommandToolData, runCommandTool));
+
+		const viewFileTool = this.instantiationService.createInstance(LocalLLMViewFileTool);
+		this._register(this.toolsService.registerTool(LocalLLMViewFileToolData, viewFileTool));
+
+		const grepTool = this.instantiationService.createInstance(LocalLLMGrepTool);
+		this._register(this.toolsService.registerTool(LocalLLMGrepToolData, grepTool));
+
+		const globTool = this.instantiationService.createInstance(LocalLLMGlobTool);
+		this._register(this.toolsService.registerTool(LocalLLMGlobToolData, globTool));
+
+		const webFetchTool = this.instantiationService.createInstance(LocalLLMWebFetchTool);
+		this._register(this.toolsService.registerTool(LocalLLMWebFetchToolData, webFetchTool));
 
 		// Create the LM provider for the model picker
 		const lmProvider = new LocalLLMChatProvider(llmProvider, this.logService);
