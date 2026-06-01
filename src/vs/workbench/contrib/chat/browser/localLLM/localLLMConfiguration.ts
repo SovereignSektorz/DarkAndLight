@@ -30,16 +30,8 @@ import { LocalLLMStatusBarEntry } from './localLLMStatusBar.js';
 import { WorkspaceChunkIndex } from './workspaceChunkIndex.js';
 import { AgentMemory } from './agentMemory.js';
 import { ConversationCompactor } from './conversationCompactor.js';
-import {
-	LocalLLMCreateFileTool, LocalLLMCreateFileToolData,
-	LocalLLMDeleteFileTool, LocalLLMDeleteFileToolData,
-	LocalLLMRunCommandTool, LocalLLMRunCommandToolData,
-	LocalLLMViewFileTool, LocalLLMViewFileToolData,
-	LocalLLMGrepTool, LocalLLMGrepToolData,
-	LocalLLMGlobTool, LocalLLMGlobToolData,
-	LocalLLMWebFetchTool, LocalLLMWebFetchToolData,
-} from './localLLMTools.js';
 import { ILanguageModelToolsService } from '../../common/tools/languageModelToolsService.js';
+import { registerLocalLLMTools } from './localLLMTools.js';
 
 const LOCAL_LLM_EXTENSION_ID = new ExtensionIdentifier('vscode.chat');
 const LOCAL_LLM_VENDOR = 'localLLM';
@@ -82,6 +74,18 @@ Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration).regis
 			type: 'boolean',
 			default: true,
 			description: 'Enable smart chunked context: instead of dumping all source files into the prompt, build per-file summaries and select only the most relevant files for each request.',
+		},
+		'localLLM.smartContext.indexingModel': {
+			type: 'string',
+			default: '',
+			description: 'Optional. A dedicated model for background indexing (e.g., "gemma4:e4b"). If set, indexing runs in parallel to the main chat model. Requires Ollama to support parallel execution (e.g., OLLAMA_NUM_PARALLEL). If empty, the main chat model is used and the indexer pauses during chat.',
+		},
+		'localLLM.smartContext.indexingMaxContext': {
+			type: 'number',
+			default: 8192,
+			minimum: 2048,
+			maximum: 131072,
+			description: 'Maximum context window size for the background indexer. Smaller values save VRAM when running parallel models.',
 		},
 		'localLLM.smartContext.maxRelevantFiles': {
 			type: 'number',
@@ -203,7 +207,9 @@ class LocalLLMChatProvider implements ILanguageModelChatProvider {
 
 		const responseStream = (async function* () {
 			for await (const chunk of stream) {
-				yield { type: 'text' as const, value: chunk };
+				if (typeof chunk === 'string') {
+					yield { type: 'text' as const, value: chunk };
+				}
 			}
 		})();
 
@@ -241,14 +247,17 @@ export class LocalLLMContribution extends Disposable {
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILanguageModelsService private readonly languageModelsService: ILanguageModelsService,
-		@ILogService private readonly logService: ILogService,
 		@ILanguageModelToolsService private readonly toolsService: ILanguageModelToolsService,
+		@ILogService private readonly logService: ILogService,
 	) {
 		super();
 		this.initialize();
 	}
 
 	private initialize(): void {
+		// Register native local tools first
+		registerLocalLLMTools(this.toolsService, this.instantiationService);
+
 		const backendType = this.configurationService.getValue<string>('localLLM.backendType') || 'ollama';
 		const baseUrl = this.configurationService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
 		const model = this.configurationService.getValue<string>('localLLM.model') || 'llama3.1';
@@ -268,27 +277,7 @@ export class LocalLLMContribution extends Disposable {
 		// Create the status bar entry for quick AI settings access
 		this._register(this.instantiationService.createInstance(LocalLLMStatusBarEntry, llmProvider));
 
-		// Register local LLM agent tools for the tool invocation pipeline
-		const createFileTool = this.instantiationService.createInstance(LocalLLMCreateFileTool);
-		this._register(this.toolsService.registerTool(LocalLLMCreateFileToolData, createFileTool));
 
-		const deleteFileTool = this.instantiationService.createInstance(LocalLLMDeleteFileTool);
-		this._register(this.toolsService.registerTool(LocalLLMDeleteFileToolData, deleteFileTool));
-
-		const runCommandTool = this.instantiationService.createInstance(LocalLLMRunCommandTool);
-		this._register(this.toolsService.registerTool(LocalLLMRunCommandToolData, runCommandTool));
-
-		const viewFileTool = this.instantiationService.createInstance(LocalLLMViewFileTool);
-		this._register(this.toolsService.registerTool(LocalLLMViewFileToolData, viewFileTool));
-
-		const grepTool = this.instantiationService.createInstance(LocalLLMGrepTool);
-		this._register(this.toolsService.registerTool(LocalLLMGrepToolData, grepTool));
-
-		const globTool = this.instantiationService.createInstance(LocalLLMGlobTool);
-		this._register(this.toolsService.registerTool(LocalLLMGlobToolData, globTool));
-
-		const webFetchTool = this.instantiationService.createInstance(LocalLLMWebFetchTool);
-		this._register(this.toolsService.registerTool(LocalLLMWebFetchToolData, webFetchTool));
 
 		// Create the LM provider for the model picker
 		const lmProvider = new LocalLLMChatProvider(llmProvider, this.logService);

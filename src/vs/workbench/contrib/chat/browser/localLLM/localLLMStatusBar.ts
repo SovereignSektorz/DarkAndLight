@@ -69,6 +69,18 @@ class ConfigureLocalLLMAction extends Action2 {
 					: 'Smart context is disabled. Click to enable intelligent file selection.',
 			},
 			{
+				id: 'indexingModel',
+				label: '$(server-environment) Indexing Model',
+				description: configService.getValue<string>('localLLM.smartContext.indexingModel') || 'Same as default',
+				detail: 'Set a dedicated background indexing model',
+			},
+			{
+				id: 'indexingMaxContext',
+				label: '$(server-process) Indexing Context Window',
+				description: `${(configService.getValue<number>('localLLM.smartContext.indexingMaxContext') || 8192) / 1024}k tokens`,
+				detail: 'Adjust VRAM usage for the background indexer',
+			},
+			{
 				id: 'rebuildIndex',
 				label: '$(refresh) Rebuild Workspace Index',
 				detail: 'Force a full re-index of the workspace for smart context',
@@ -186,6 +198,65 @@ class ConfigureLocalLLMAction extends Action2 {
 			const newValue = !smartContextEnabled;
 			await configService.updateValue('localLLM.smartContext.enabled', newValue);
 			logService.info(`[Dark Matter] Smart context ${newValue ? 'enabled' : 'disabled'}`);
+
+		} else if (picked.id === 'indexingModel') {
+			const baseUrl = configService.getValue<string>('localLLM.baseUrl') || 'http://127.0.0.1:11434';
+			const currentIdxModel = configService.getValue<string>('localLLM.smartContext.indexingModel') || '';
+			let modelNames: string[] = [];
+			try {
+				const r1 = await fetch(`${baseUrl}/v1/models`);
+				if (r1.ok) {
+					const data = await r1.json();
+					modelNames = (data.data ?? []).map((m: { id: string }) => m.id);
+				}
+				if (modelNames.length === 0) {
+					const r2 = await fetch(`${baseUrl}/api/tags`);
+					if (r2.ok) {
+						const data = await r2.json();
+						modelNames = (data.models ?? []).map((m: { name: string }) => m.name);
+					}
+				}
+			} catch {}
+
+			const modelItems: IQuickPickItem[] = [
+				{ id: '', label: currentIdxModel === '' ? `$(check) (Use default chat model)` : `     (Use default chat model)` },
+				...modelNames.map(name => ({
+					id: name,
+					label: name === currentIdxModel ? `$(check) ${name}` : `     ${name}`,
+				}))
+			];
+
+			const selectedModel = await quickInputService.pick(modelItems, {
+				title: 'Select Indexing Model',
+				placeHolder: 'Choose a model to use for background indexing',
+			});
+
+			if (selectedModel !== undefined && selectedModel.id !== currentIdxModel) {
+				await configService.updateValue('localLLM.smartContext.indexingModel', selectedModel.id);
+				logService.info(`[Dark Matter] Indexing model updated to: ${selectedModel.id}`);
+			}
+
+		} else if (picked.id === 'indexingMaxContext') {
+			const currentIdxCtx = configService.getValue<number>('localLLM.smartContext.indexingMaxContext') || 8192;
+			const newContextStr = await quickInputService.input({
+				title: 'Indexing Context Window',
+				value: `${currentIdxCtx}`,
+				prompt: 'Enter max tokens for background indexing (e.g. 4096, 8192)',
+				validateInput: async (value) => {
+					const num = parseInt(value);
+					if (isNaN(num) || num < 2048 || num > 131072) {
+						return 'Please enter a number between 2048 and 131072';
+					}
+					return undefined;
+				},
+			});
+
+			if (newContextStr) {
+				const newContext = parseInt(newContextStr);
+				if (newContext !== currentIdxCtx) {
+					await configService.updateValue('localLLM.smartContext.indexingMaxContext', newContext);
+				}
+			}
 
 		} else if (picked.id === 'rebuildIndex') {
 			// Trigger workspace re-index via internal command

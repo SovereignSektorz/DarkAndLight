@@ -174,11 +174,38 @@ export class WorkspaceChunkIndex extends Disposable {
 		this._logService.info(`[ChunkIndex] Using interval reindex strategy (${intervalSec}s)`);
 	}
 
+	private _activeCts: CancellationTokenSource | undefined;
+	private _isPaused = false;
+	private _reindexPending = false;
+
+	public pause(): void {
+		this._isPaused = true;
+		if (this._activeCts) {
+			this._logService.info('[ChunkIndex] Pausing indexer and aborting active run...');
+			this._activeCts.cancel();
+			this._activeCts = undefined;
+		}
+	}
+
+	public resume(): void {
+		if (!this._isPaused) { return; }
+		this._isPaused = false;
+		this._logService.info('[ChunkIndex] Indexer resumed');
+		if (this._reindexPending) {
+			this._reindexPending = false;
+			this.scheduleReindex();
+		}
+	}
+
 	// ========================================================================
 	// Full Index Build (with progress notification)
 	// ========================================================================
 
 	public async runFullIndex(): Promise<void> {
+		if (this._isPaused) {
+			this._reindexPending = true;
+			return;
+		}
 		if (this._isIndexing) {
 			return;
 		}
@@ -194,6 +221,7 @@ export class WorkspaceChunkIndex extends Disposable {
 		}
 
 		const cts = new CancellationTokenSource();
+		this._activeCts = cts;
 		this._isIndexing = true;
 
 		try {
@@ -208,6 +236,9 @@ export class WorkspaceChunkIndex extends Disposable {
 			this._logService.error(`[ChunkIndex] Indexing failed: ${err}`);
 		} finally {
 			this._isIndexing = false;
+			if (this._activeCts === cts) {
+				this._activeCts = undefined;
+			}
 			cts.dispose();
 		}
 	}
@@ -376,9 +407,13 @@ export class WorkspaceChunkIndex extends Disposable {
 			}
 		];
 
+		const indexingModel = this.configurationService.getValue<string>('localLLM.smartContext.indexingModel');
+		const modelOverride = indexingModel ? indexingModel : undefined;
+		const maxTokensOverride = this.configurationService.getValue<number>('localLLM.smartContext.indexingMaxContext') || 8192;
+
 		let result = '';
 		try {
-			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token, modelOverride, maxTokensOverride)) {
 				result += chunk;
 				if (token.isCancellationRequested) { return undefined; }
 			}
@@ -386,12 +421,16 @@ export class WorkspaceChunkIndex extends Disposable {
 			// Try to parse JSON response
 			const jsonMatch = result.match(/\{[\s\S]*\}/);
 			if (jsonMatch) {
-				const parsed = JSON.parse(jsonMatch[0]);
-				return {
-					summary: parsed.summary || '',
-					keyExports: Array.isArray(parsed.keyExports) ? parsed.keyExports : [],
-					dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
-				};
+				try {
+					const parsed = JSON.parse(jsonMatch[0]);
+					return {
+						summary: parsed.summary || '',
+						keyExports: Array.isArray(parsed.keyExports) ? parsed.keyExports : [],
+						dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
+					};
+				} catch (e) {
+					// Fall back to raw text if JSON parsing fails
+				}
 			}
 
 			// Fallback: use the raw text as summary
@@ -435,9 +474,13 @@ export class WorkspaceChunkIndex extends Disposable {
 			}
 		];
 
+		const indexingModel = this.configurationService.getValue<string>('localLLM.smartContext.indexingModel');
+		const modelOverride = indexingModel ? indexingModel : undefined;
+		const maxTokensOverride = this.configurationService.getValue<number>('localLLM.smartContext.indexingMaxContext') || 8192;
+
 		let result = '';
 		try {
-			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token, modelOverride, maxTokensOverride)) {
 				result += chunk;
 				if (token.isCancellationRequested) { return; }
 			}
@@ -611,7 +654,7 @@ export class WorkspaceChunkIndex extends Disposable {
 
 	private isIgnoredPath(path: string): boolean {
 		const parts = path.split('/');
-		return parts.some(p => IGNORED_DIRS.has(p));
+		return parts.some(p => IGNORED_DIRS.has(p) || p === '.darkmatter');
 	}
 
 	get isReady(): boolean {

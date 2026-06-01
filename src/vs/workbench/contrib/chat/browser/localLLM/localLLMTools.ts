@@ -16,7 +16,9 @@ import { IChatTerminalToolInvocationData } from '../../common/chatService/chatSe
 import { ISearchService, QueryType, ITextQuery, IFileQuery, resultIsMatch } from '../../../../services/search/common/search.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
+import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import {
+	ILanguageModelToolsService,
 	CountTokensCallback,
 	IPreparedToolInvocation,
 	IToolData,
@@ -222,12 +224,19 @@ export class LocalLLMCreateFileTool implements IToolImpl {
 		@IFileService private readonly fileService: IFileService,
 		@ITextFileService private readonly textFileService: ITextFileService,
 		@IEditorService private readonly editorService: IEditorService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) { }
+
+	private getRootUri(params: ICreateFileToolParams): URI {
+		if (params.rootUri) { return URI.revive(params.rootUri); }
+		const workspace = this.workspaceService.getWorkspace();
+		return workspace.folders.length > 0 ? workspace.folders[0].uri : URI.file('/');
+	}
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const params = context.parameters as ICreateFileToolParams;
 		const verb = params.actionType === 'overwrite' ? 'Overwrite' : 'Create';
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.filePath);
 		const fileLink = `[](${fileUri.toString()})`;
 
@@ -244,7 +253,7 @@ export class LocalLLMCreateFileTool implements IToolImpl {
 
 	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, _token: CancellationToken): Promise<IToolResult> {
 		const params = invocation.parameters as ICreateFileToolParams;
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.filePath);
 
 		const dirUri = dirname(fileUri);
@@ -267,11 +276,18 @@ export class LocalLLMDeleteFileTool implements IToolImpl {
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) { }
+
+	private getRootUri(params: IDeleteFileToolParams): URI {
+		if (params.rootUri) { return URI.revive(params.rootUri); }
+		const workspace = this.workspaceService.getWorkspace();
+		return workspace.folders.length > 0 ? workspace.folders[0].uri : URI.file('/');
+	}
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const params = context.parameters as IDeleteFileToolParams;
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.filePath);
 		const fileLink = `[](${fileUri.toString()})`;
 
@@ -288,7 +304,7 @@ export class LocalLLMDeleteFileTool implements IToolImpl {
 
 	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, _token: CancellationToken): Promise<IToolResult> {
 		const params = invocation.parameters as IDeleteFileToolParams;
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.filePath);
 
 		await this.fileService.del(fileUri, { recursive: true });
@@ -389,11 +405,18 @@ export class LocalLLMViewFileTool implements IToolImpl {
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) { }
+
+	private getRootUri(params: IViewFileToolParams): URI {
+		if (params.rootUri) { return URI.revive(params.rootUri); }
+		const workspace = this.workspaceService.getWorkspace();
+		return workspace.folders.length > 0 ? workspace.folders[0].uri : URI.file('/');
+	}
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const params = context.parameters as IViewFileToolParams;
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.path);
 		const fileLink = `[](${fileUri.toString()})`;
 
@@ -405,7 +428,7 @@ export class LocalLLMViewFileTool implements IToolImpl {
 
 	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, _token: CancellationToken): Promise<IToolResult> {
 		const params = invocation.parameters as IViewFileToolParams;
-		const rootUri = URI.revive(params.rootUri);
+		const rootUri = this.getRootUri(params);
 		const fileUri = URI.joinPath(rootUri, params.path);
 
 		try {
@@ -650,4 +673,27 @@ export class LocalLLMWebFetchTool implements IToolImpl {
 			};
 		}
 	}
+}
+
+export function registerLocalLLMTools(toolsService: ILanguageModelToolsService, instantiationService: IInstantiationService): void {
+	toolsService.registerToolData(LocalLLMViewFileToolData);
+	toolsService.registerToolImplementation(LocalLLMViewFileToolId, instantiationService.createInstance(LocalLLMViewFileTool));
+
+	toolsService.registerToolData(LocalLLMGrepToolData);
+	toolsService.registerToolImplementation(LocalLLMGrepToolId, instantiationService.createInstance(LocalLLMGrepTool));
+
+	toolsService.registerToolData(LocalLLMGlobToolData);
+	toolsService.registerToolImplementation(LocalLLMGlobToolId, instantiationService.createInstance(LocalLLMGlobTool));
+
+	toolsService.registerToolData(LocalLLMCreateFileToolData);
+	toolsService.registerToolImplementation(LocalLLMCreateFileToolId, instantiationService.createInstance(LocalLLMCreateFileTool));
+
+	toolsService.registerToolData(LocalLLMDeleteFileToolData);
+	toolsService.registerToolImplementation(LocalLLMDeleteFileToolId, instantiationService.createInstance(LocalLLMDeleteFileTool));
+
+	toolsService.registerToolData(LocalLLMRunCommandToolData);
+	toolsService.registerToolImplementation(LocalLLMRunCommandToolId, instantiationService.createInstance(LocalLLMRunCommandTool));
+
+	toolsService.registerToolData(LocalLLMWebFetchToolData);
+	toolsService.registerToolImplementation(LocalLLMWebFetchToolId, instantiationService.createInstance(LocalLLMWebFetchTool));
 }

@@ -219,11 +219,13 @@ export class ConversationCompactor extends Disposable {
 	/**
 	 * Call the local LLM model and collect the full response.
 	 */
-	private async callModel(prompt: LLMChatMessage[], token: CancellationToken): Promise<string | undefined> {
+	private async callModel(prompt: LLMChatMessage[], token: CancellationToken, selectedModel?: string): Promise<string | undefined> {
 		let result = '';
 		try {
-			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token)) {
-				result += chunk;
+			for await (const chunk of this.llmProvider.sendChatRequest(prompt, token, selectedModel)) {
+				if (typeof chunk === 'string') {
+					result += chunk;
+				}
 				if (token.isCancellationRequested) { return undefined; }
 			}
 			return result.trim();
@@ -236,12 +238,86 @@ export class ConversationCompactor extends Disposable {
 	/**
 	 * Rough token estimation (chars / 4).
 	 */
-	private estimateTokens(messages: LLMChatMessage[]): number {
+	public estimateTokens(messages: LLMChatMessage[]): number {
 		let totalChars = 0;
 		for (const msg of messages) {
-			totalChars += msg.content.length;
+			if (msg.content) {
+				totalChars += msg.content.length;
+			}
 		}
 		return Math.ceil(totalChars / 4);
+	}
+
+	/**
+	 * Mid-loop compactor that squashes old tool calls/assistant turns during a long autonomous loop.
+	 */
+	public async compactMidLoop(messages: LLMChatMessage[], maxHistoryTokens: number, token: CancellationToken, fastModel?: string): Promise<LLMChatMessage[]> {
+		const totalTokens = this.estimateTokens(messages);
+		if (totalTokens <= maxHistoryTokens) {
+			return messages;
+		}
+
+		this._logService.info(`[Compactor] Mid-loop budget exceeded: ~${totalTokens} tokens > budget: ${maxHistoryTokens}. Compacting...`);
+
+		// We want to keep the first 2 messages (system prompt, original user message + context)
+		// We want to keep the last 4 messages (the most recent tool calls/results)
+		if (messages.length <= 6) {
+			return messages; // Too few messages to compact effectively
+		}
+
+		const keepStart = 2; // Keep index 0 and 1
+		const keepEndCount = 4; // Keep last 4 messages
+		const splitEnd = messages.length - keepEndCount;
+
+		if (splitEnd <= keepStart) {
+			return messages;
+		}
+
+		const oldMessages = messages.slice(keepStart, splitEnd);
+		
+		// Create a text summary of the old tool calls
+		let turnTexts = '';
+		for (const msg of oldMessages) {
+			if (msg.role === 'assistant') {
+				const hasTools = msg.tool_calls && msg.tool_calls.length > 0;
+				if (msg.content) {
+					turnTexts += `\nAssistant: ${this.truncate(msg.content, 400)}`;
+				}
+				if (hasTools) {
+					turnTexts += `\nAssistant called tools: ${msg.tool_calls!.map(t => t.function.name).join(', ')}`;
+				}
+			} else if (msg.role === 'tool') {
+				turnTexts += `\nTool result (${msg.name}): ${this.truncate(msg.content || '', 800)}`;
+			}
+		}
+
+		const prompt: LLMChatMessage[] = [
+			{
+				role: 'system',
+				content: 'You are summarizing the output of command-line and filesystem tools used by an AI agent. ' +
+					'Create a concise bullet-point recap of what tools were run and their most important findings or results. ' +
+					'Be highly technical and preserve critical data like file paths, exact error messages, or found patterns.',
+			},
+			{
+				role: 'user',
+				content: `Summarize the following tool execution history:\n${turnTexts}`,
+			}
+		];
+
+		const recap = await this.callModel(prompt, token, fastModel);
+		if (!recap) {
+			return messages; // Fallback if summarization fails
+		}
+
+		this._logService.info(`[Compactor] Successfully compacted mid-loop history`);
+
+		const newMessages: LLMChatMessage[] = [
+			...messages.slice(0, keepStart),
+			{ role: 'user', content: `[Mid-Loop Compaction Recap - Older tool executions summarized below]\n${recap}` },
+			...messages.slice(splitEnd)
+		];
+
+		return newMessages;
 	}
 
 	/**

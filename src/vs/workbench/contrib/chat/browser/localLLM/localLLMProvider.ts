@@ -12,9 +12,26 @@ import { localize } from '../../../../../nls.js';
 
 // --- Shared message type (OpenAI-compatible) ---------------------------------
 
+export interface LLMToolCall {
+	id: string;
+	type: 'function';
+	function: {
+		name: string;
+		arguments: string;
+	};
+}
+
 export interface LLMChatMessage {
-	role: 'system' | 'user' | 'assistant';
-	content: string;
+	role: 'system' | 'user' | 'assistant' | 'tool';
+	content: string | null;
+	name?: string;
+	tool_calls?: LLMToolCall[];
+	tool_call_id?: string;
+}
+
+export interface LLMStreamToolCall {
+	type: 'tool_calls';
+	tool_calls: LLMToolCall[];
 }
 
 
@@ -189,7 +206,9 @@ export class LocalLLMProvider extends Disposable {
 		messages: LLMChatMessage[],
 		token: CancellationToken,
 		modelOverride?: string,
-	): AsyncIterable<string> {
+		maxTokensOverride?: number,
+		tools?: Record<string, unknown>[],
+	): AsyncIterable<string | LLMStreamToolCall> {
 		let activeModel = modelOverride || this.model;
 		// Strip the "localLLM:" vendor prefix added by the model picker
 		// (e.g. "localLLM:gemma4:e4b" → "gemma4:e4b").
@@ -201,9 +220,9 @@ export class LocalLLMProvider extends Disposable {
 		}
 
 		const url = `${this.baseUrl}/v1/chat/completions`;
-		const maxTokens = this.configurationService.getValue<number>('localLLM.maxContextWindow') || 131072;
+		const maxTokens = maxTokensOverride !== undefined ? maxTokensOverride : (this.configurationService.getValue<number>('localLLM.maxContextWindow') || 131072);
 
-		const body = {
+		const body: Record<string, unknown> = {
 			model: activeModel,
 			messages,
 			stream: true,
@@ -211,6 +230,10 @@ export class LocalLLMProvider extends Disposable {
 			temperature: 0.7,
 			frequency_penalty: 0.1,   // mirrors old repeat_penalty: 1.2 behaviour
 		};
+
+		if (tools && tools.length > 0) {
+			body.tools = tools;
+		}
 
 		const bodyStr = JSON.stringify(body);
 
@@ -261,6 +284,7 @@ export class LocalLLMProvider extends Disposable {
 		let firstByteReceived = false;
 		const startTime = Date.now();
 		let inReasoning = false;
+		const toolCallsBuffer: LLMToolCall[] = [];
 
 		try {
 			while (true) {
@@ -271,6 +295,11 @@ export class LocalLLMProvider extends Disposable {
 					if (token.isCancellationRequested) { await reader.cancel(); }
 					if (inReasoning) {
 						yield '\n</think>\n';
+					}
+					// Yield any accumulated tool calls that weren't flushed via finish_reason
+					if (toolCallsBuffer.length > 0) {
+						this._logService.info(`[LocalLLM] Stream ended with ${toolCallsBuffer.filter(Boolean).length} buffered tool calls — yielding now`);
+						yield { type: 'tool_calls', tool_calls: toolCallsBuffer.filter(Boolean) };
 					}
 					break;
 				}
@@ -295,6 +324,12 @@ export class LocalLLMProvider extends Disposable {
 
 					try {
 						const chunk = JSON.parse(jsonStr);
+
+						if (chunk.error) {
+							const errMsg = typeof chunk.error === 'string' ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
+							throw new Error(`LLM Backend Error: ${errMsg}`);
+						}
+
 						const delta = chunk.choices?.[0]?.delta;
 						
 						// Some backends return reasoning_content or reasoning instead of raw tags
@@ -326,15 +361,44 @@ export class LocalLLMProvider extends Disposable {
 							yield chunk.content;
 						}
 
+						// Handle tool_calls
+						const toolCallsChunk = delta?.tool_calls;
+						if (toolCallsChunk && Array.isArray(toolCallsChunk)) {
+							for (const tc of toolCallsChunk) {
+								const index = tc.index ?? 0;
+								if (!toolCallsBuffer[index]) {
+									const fallbackId = 'call_' + Math.random().toString(36).substring(2, 9);
+									toolCallsBuffer[index] = {
+										id: tc.id || fallbackId,
+										type: 'function',
+										function: { name: tc.function?.name || '', arguments: '' }
+									};
+								} else {
+									if (tc.id) { toolCallsBuffer[index].id = tc.id; }
+									if (tc.function?.name) { toolCallsBuffer[index].function.name += tc.function.name; }
+								}
+								if (tc.function?.arguments) {
+									toolCallsBuffer[index].function.arguments += tc.function.arguments;
+								}
+							}
+						}
+
 						// Signal end of stream
-						if (chunk.choices?.[0]?.finish_reason === 'stop' || chunk.done === true) {
+						const finishReason = chunk.choices?.[0]?.finish_reason;
+						if (finishReason === 'stop' || finishReason === 'tool_calls' || chunk.done === true) {
 							if (inReasoning) {
 								yield '\n</think>\n';
 								inReasoning = false;
 							}
+							if (toolCallsBuffer.length > 0) {
+								yield { type: 'tool_calls', tool_calls: toolCallsBuffer.filter(Boolean) };
+							}
 							return;
 						}
-					} catch {
+					} catch (err) {
+						if (err instanceof Error && err.message.startsWith('LLM Backend Error')) {
+							throw err;
+						}
 						this._logService.warn(`[LocalLLM] Failed to parse SSE chunk: ${jsonStr}`);
 					}
 				}
@@ -344,5 +408,6 @@ export class LocalLLMProvider extends Disposable {
 			cancelListener.dispose();
 		}
 	}
+
 }
 
