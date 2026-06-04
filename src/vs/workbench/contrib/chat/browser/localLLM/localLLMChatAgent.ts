@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -16,13 +16,16 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { ILifecycleService } from '../../../../services/lifecycle/common/lifecycle.js';
 import { ChatAgentLocation, ChatModeKind } from '../../common/constants.js';
 import { IChatAgentData, IChatAgentHistoryEntry, IChatAgentImplementation, IChatAgentRequest, IChatAgentResult, IChatAgentService } from '../../common/participants/chatAgents.js';
-import { IChatFollowup, IChatProgress } from '../../common/chatService/chatService.js';
+import { IChatFollowup, IChatProgress, IChatService } from '../../common/chatService/chatService.js';
+import { IChatEditingService } from '../../common/editing/chatEditingService.js';
+import { ChatModel } from '../../common/model/chatModel.js';
 import { LLMChatMessage, LocalLLMProvider, LLMToolCall } from './localLLMProvider.js';
 import { IChatRequestVariableEntry, isImplicitVariableEntry } from '../../common/attachments/chatVariableEntries.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
 import { ITextModel } from '../../../../../editor/common/model.js';
 import { IEditor } from '../../../../../editor/common/editorCommon.js';
 import { isLocation } from '../../../../../editor/common/languages.js';
+import { Range } from '../../../../../editor/common/core/range.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 import { ILanguageModelToolsService } from '../../common/tools/languageModelToolsService.js';
@@ -179,6 +182,8 @@ export class LocalLLMChatAgent extends Disposable {
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 		@ILanguageModelToolsService private readonly toolsService: ILanguageModelToolsService,
+		@IChatService private readonly chatService: IChatService,
+		@IChatEditingService private readonly chatEditingService: IChatEditingService,
 	) {
 		super();
 
@@ -437,6 +442,7 @@ export class LocalLLMChatAgent extends Disposable {
 			'When the user asks you to create, modify, or delete files, DO IT using your tools.',
 			'When you need to understand code before making changes, READ the files first using your tools.',
 			'CRITICAL: Your context window is limited. Prioritize using specific JSON tools (like localLLM_viewFile, localLLM_grep) over generic shell commands. DO NOT use "ls" for listing, "cat" for viewing, or "grep" for finding in the terminal. When using localLLM_viewFile, always use the startLine and endLine parameters to read small chunks instead of entire files.',
+			'When you only need to modify a small part of an existing file, use localLLM_editFile to replace specific lines instead of overwriting the whole file with localLLM_createFile.',
 			'Format your responses with markdown when appropriate.',
 			'',
 		];
@@ -572,20 +578,20 @@ export class LocalLLMChatAgent extends Disposable {
 			const activeModelName = selectedModel
 				? (selectedModel.startsWith('localLLM:') ? selectedModel.slice('localLLM:'.length)
 					: selectedModel.startsWith('ollama:') ? selectedModel.slice('ollama:'.length)
-					: selectedModel)
+						: selectedModel)
 				: this.llmProvider.model;
-				
+
 			let shouldPauseIndexer = true;
 			const indexingModel = this.configurationService.getValue<string>('localLLM.smartContext.indexingModel');
 			if (indexingModel && indexingModel !== activeModelName) {
 				shouldPauseIndexer = false;
 				this._logService.info(`[LocalLLM] Dedicated indexing model "${indexingModel}" is configured. Leaving background indexer active.`);
 			}
-			
+
 			if (shouldPauseIndexer) {
 				this._chunkIndex.pause();
 			}
-			
+
 			this._logService.info(`[LocalLLM] Handling request with model "${activeModelName}": "${request.message.substring(0, 100)}"`);
 			this._logService.info(`[LocalLLM] DEBUG: userSelectedModelId="${request.userSelectedModelId}", selectedModel="${selectedModel}", default="${this.llmProvider.model}"`);
 			let messages: LLMChatMessage[] = [];
@@ -621,7 +627,7 @@ export class LocalLLMChatAgent extends Disposable {
 				fullResponse = continuationData.responseToProcess;
 				depth = continuationData.depth;
 				resumeLoop = true;
-				
+
 				// Re-estimate budget based on resumed messages
 				const systemPromptTokens = messages.length > 0 ? this._conversationCompactor.estimateTokens([messages[0]]) : 0;
 				const remainingAfterSystem = maxContextWindow - systemPromptTokens;
@@ -737,78 +743,136 @@ export class LocalLLMChatAgent extends Disposable {
 
 			while (true) {
 				const actionResults: { type: string; label: string; output: string; callId?: string }[] = [];
-				
+
 				if (!resumeLoop) {
 					if (toolCalls && toolCalls.length > 0) {
-					for (const tc of toolCalls) {
-						let resultText = '';
-						try {
-							const args = JSON.parse(tc.function.arguments || '{}');
-							
-							// Intercept forbidden terminal commands and throw an explicit error to train the agent in-context
-							if (tc.function.name === 'run_in_terminal' || tc.function.name === 'localLLM_runCommand') {
-								const cmd = args.command || '';
-								if (/^\s*(cat|tail|head|less|more|grep|egrep|fgrep)\b/i.test(cmd)) {
-									throw new Error(`CRITICAL RULE VIOLATION: You attempted to use a forbidden bash command to read/search files. You MUST use 'localLLM_viewFile' or 'localLLM_grep' tools instead to save context memory!`);
+						for (const tc of toolCalls) {
+							let resultText = '';
+							try {
+								const args = JSON.parse(tc.function.arguments || '{}');
+
+								// Intercept forbidden terminal commands and throw an explicit error to train the agent in-context
+								if (tc.function.name === 'run_in_terminal' || tc.function.name === 'localLLM_runCommand') {
+									const cmd = args.command || '';
+									if (/^\s*(cat|tail|head|less|more|grep|egrep|fgrep)\b/i.test(cmd)) {
+										throw new Error(`CRITICAL RULE VIOLATION: You attempted to use a forbidden bash command to read/search files. You MUST use 'localLLM_viewFile' or 'localLLM_grep' tools instead to save context memory!`);
+									}
 								}
-							}
 
-							const toolData = Array.from(this.toolsService.getTools(undefined)).find(t => t.id === tc.function.name);
-							if (!toolData) {
-								throw new Error(`Tool ${tc.function.name} not found`);
-							}
-							
-							progress([{
-								kind: 'externalToolInvocationUpdate',
-								toolCallId: tc.id,
-								toolName: toolData.displayName,
-								isComplete: false,
-								invocationMessage: `Invoking ${toolData.displayName}`
-							}]);
+								const toolData = Array.from(this.toolsService.getTools(undefined)).find(t => t.id === tc.function.name);
+								if (!toolData) {
+									throw new Error(`Tool ${tc.function.name} not found`);
+								}
 
-							const countTokens = async () => 0;
-							
-							const result = await this.toolsService.invokeTool(
-								{
-									callId: tc.id,
-									toolId: tc.function.name,
-									parameters: args,
-									context: { sessionResource: request.sessionResource },
-								},
-								countTokens,
-								token,
-							);
-							
-							progress([{
-								kind: 'externalToolInvocationUpdate',
-								toolCallId: tc.id,
-								toolName: toolData.displayName,
-								isComplete: true
-							}]);
-							
-							const contentParts = result.content.map(p => {
-								if (p.kind === 'text') { return p.value; }
-								if (p.kind === 'data') { return `[Binary Data ${p.value.mimeType}]`; }
-								return '';
-							});
-							resultText = contentParts.join('\n');
-							actionResults.push({ type: 'tool', label: tc.function.name, output: resultText, callId: tc.id });
-							
-						} catch(err) {
-							const errorMessage = err instanceof Error ? err.message : String(err);
-							resultText = `Action failed: ${errorMessage}`;
-							actionResults.push({ type: 'tool', label: tc.function.name, output: resultText, callId: tc.id });
+								progress([{
+									kind: 'externalToolInvocationUpdate',
+									toolCallId: tc.id,
+									toolName: toolData.displayName,
+									isComplete: false,
+									invocationMessage: `Invoking ${toolData.displayName}`
+								}]);
+
+								const countTokens = async () => 0;
+
+								const result = await this.toolsService.invokeTool(
+									{
+										callId: tc.id,
+										toolId: tc.function.name,
+										parameters: args,
+										context: { sessionResource: request.sessionResource },
+									},
+									countTokens,
+									token,
+								);
+
+								progress([{
+									kind: 'externalToolInvocationUpdate',
+									toolCallId: tc.id,
+									toolName: toolData.displayName,
+									isComplete: true
+								}]);
+
+								let resultText = '';
+
+								const contentParts = result.content.map(p => {
+									if (p.kind === 'text') { return p.value; }
+									if (p.kind === 'data') { return `[Binary Data ${p.value.mimeType}]`; }
+									return '';
+								});
+								resultText = contentParts.join('\n');
+
+								if (tc.function.name === 'localLLM_createFile' || tc.function.name === 'localLLM_editFile') {
+									const filePath = args.filePath;
+									let emitTextEdit = false;
+									let textEditRange = new Range(1, 1, 1, 1);
+									let textEditText = '';
+
+									if (tc.function.name === 'localLLM_editFile' && resultText.startsWith('[EDIT_PAYLOAD]')) {
+										try {
+											const payload = JSON.parse(resultText.substring('[EDIT_PAYLOAD]'.length));
+											resultText = payload.message; // what goes back to the model
+
+											emitTextEdit = true;
+											textEditRange = new Range(payload.startLine, 1, payload.endLine + 1, 1);
+											textEditText = payload.newContent + (payload.newContent.endsWith('\n') ? '' : '\n');
+										} catch (e) {
+											resultText = resultText.substring('[EDIT_PAYLOAD]'.length);
+										}
+									} else if (tc.function.name === 'localLLM_createFile' && resultText.startsWith('[EDIT_PAYLOAD]')) {
+										try {
+											const payload = JSON.parse(resultText.substring('[EDIT_PAYLOAD]'.length));
+											resultText = payload.message;
+
+											emitTextEdit = true;
+											// For createFile overwrite, replace all lines.
+											textEditRange = new Range(1, 1, (payload.lineCount || 1) + 1, 1);
+											textEditText = payload.content + (payload.content.endsWith('\n') ? '' : '\n');
+										} catch (e) {
+											resultText = resultText.substring('[EDIT_PAYLOAD]'.length);
+										}
+									}
+
+									if (emitTextEdit) {
+										const workspace = this.workspaceService.getWorkspace();
+										const rootUri = workspace.folders.length > 0 ? workspace.folders[0].uri : URI.file('/');
+										const fileUri = URI.joinPath(rootUri, filePath);
+
+										// Hook into the native Chat Editing Service (Copilot Edits)
+										// This makes the file update instantly in the editor with Accept/Discard controls.
+										const chatModel = this.chatService.getSession(request.sessionResource) as ChatModel;
+										if (chatModel) {
+											this.chatEditingService.startOrContinueGlobalEditingSession(chatModel);
+										}
+
+										progress([{
+											kind: 'textEdit',
+											uri: fileUri,
+											edits: [{
+												range: textEditRange,
+												text: textEditText
+											}],
+											done: true
+										}]);
+									}
+								}
+
+								actionResults.push({ type: 'tool', label: tc.function.name, output: resultText, callId: tc.id });
+
+							} catch (err) {
+								const errorMessage = err instanceof Error ? err.message : String(err);
+								resultText = `Action failed: ${errorMessage}`;
+								actionResults.push({ type: 'tool', label: tc.function.name, output: resultText, callId: tc.id });
+							}
 						}
 					}
 				}
-			}
 
 				if (!resumeLoop) {
 					if (actionResults.length === 0) {
 						this._logService.info(`[LocalLLM] No action results, exiting loop`);
 						break;
 					}
-					
+
 					// Strip thinking tags from content — they confuse the model on follow-up turns
 					let assistantContent: string | null = responseToProcess
 						? responseToProcess

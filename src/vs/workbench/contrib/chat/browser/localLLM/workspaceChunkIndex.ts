@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Copyright (c) Dark Matter IDE Contributors. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
@@ -425,8 +425,8 @@ export class WorkspaceChunkIndex extends Disposable {
 					const parsed = JSON.parse(jsonMatch[0]);
 					return {
 						summary: parsed.summary || '',
-						keyExports: Array.isArray(parsed.keyExports) ? parsed.keyExports : [],
-						dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
+						keyExports: Array.isArray(parsed.keyExports) ? parsed.keyExports.map((x: unknown) => typeof x === 'string' ? x : String((x as Record<string, unknown>)?.name || x)) : [],
+						dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map((x: unknown) => typeof x === 'string' ? x : String((x as Record<string, unknown>)?.module || (x as Record<string, unknown>)?.name || x)) : [],
 					};
 				} catch (e) {
 					// Fall back to raw text if JSON parsing fails
@@ -537,7 +537,7 @@ export class WorkspaceChunkIndex extends Disposable {
 
 			// Key exports mentioned in user message
 			for (const exp of entry.keyExports) {
-				if (context.userMessage.includes(exp)) {
+				if (typeof exp === 'string' && context.userMessage.includes(exp)) {
 					score += 30;
 				}
 			}
@@ -545,7 +545,7 @@ export class WorkspaceChunkIndex extends Disposable {
 			// Dependencies on active file (if the active file is imported by this file)
 			if (context.activeFilePath) {
 				const activeFileName = context.activeFilePath.split('/').pop()?.replace(/\.\w+$/, '') || '';
-				if (entry.dependencies.some(d => d.includes(activeFileName))) {
+				if (entry.dependencies.some(d => typeof d === 'string' && d.includes(activeFileName))) {
 					score += 25;
 				}
 			}

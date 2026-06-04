@@ -9,8 +9,6 @@ import { streamToBuffer } from '../../../../../base/common/buffer.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { dirname } from '../../../../../base/common/resources.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
-import { IEditorService } from '../../../../services/editor/common/editorService.js';
-import { ITextFileService } from '../../../../services/textfile/common/textfiles.js';
 import { ITerminalService } from '../../../../contrib/terminal/browser/terminal.js';
 import { IChatTerminalToolInvocationData } from '../../common/chatService/chatService.js';
 import { ISearchService, QueryType, ITextQuery, IFileQuery, resultIsMatch } from '../../../../services/search/common/search.js';
@@ -41,6 +39,7 @@ export const LocalLLMViewFileToolId = 'localLLM_viewFile';
 export const LocalLLMGrepToolId = 'localLLM_grep';
 export const LocalLLMGlobToolId = 'localLLM_glob';
 export const LocalLLMWebFetchToolId = 'localLLM_webFetch';
+export const LocalLLMEditFileToolId = 'localLLM_editFile';
 
 // ============================================================================
 // Tool Data (metadata for the tool registry)
@@ -79,6 +78,26 @@ export const LocalLLMDeleteFileToolData: IToolData = {
 			filePath: { type: 'string', description: 'Workspace-relative file path to delete' },
 		},
 		required: ['filePath'],
+	},
+};
+
+export const LocalLLMEditFileToolData: IToolData = {
+	id: LocalLLMEditFileToolId,
+	displayName: 'Edit File',
+	modelDescription: 'Edits an existing file in the workspace by replacing a specific line range with new content.',
+	source: ToolDataSource.Internal,
+	canBeReferencedInPrompt: false,
+	canRequestPreApproval: true,
+	canRequestPostApproval: false,
+	inputSchema: {
+		type: 'object',
+		properties: {
+			filePath: { type: 'string', description: 'Workspace-relative file path' },
+			startLine: { type: 'number', description: 'Starting line number to replace (1-indexed)' },
+			endLine: { type: 'number', description: 'Ending line number to replace (1-indexed, inclusive)' },
+			replacementContent: { type: 'string', description: 'The new content that will replace the specified lines' },
+		},
+		required: ['filePath', 'startLine', 'endLine', 'replacementContent'],
 	},
 };
 
@@ -214,6 +233,14 @@ export interface IWebFetchToolParams {
 	url: string;
 }
 
+export interface IEditFileToolParams {
+	filePath: string;
+	startLine: number;
+	endLine: number;
+	replacementContent: string;
+	rootUri?: URI;
+}
+
 // ============================================================================
 // Create/Overwrite File Tool
 // ============================================================================
@@ -222,8 +249,6 @@ export class LocalLLMCreateFileTool implements IToolImpl {
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
-		@ITextFileService private readonly textFileService: ITextFileService,
-		@IEditorService private readonly editorService: IEditorService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 	) { }
 
@@ -259,12 +284,90 @@ export class LocalLLMCreateFileTool implements IToolImpl {
 		const dirUri = dirname(fileUri);
 		try { await this.fileService.createFolder(dirUri); } catch { }
 
-		await this.textFileService.write(fileUri, params.content);
-		await this.editorService.openEditor({ resource: fileUri });
+		let currentLineCount = 1;
+		try {
+			const existingContent = await this.fileService.readFile(fileUri);
+			currentLineCount = existingContent.value.toString().split('\n').length;
+		} catch { }
+
+		const resultPayload = JSON.stringify({
+			message: `Proposed ${params.actionType} for ${params.filePath}`,
+			filePath: params.filePath,
+			content: params.content,
+			actionType: params.actionType,
+			lineCount: currentLineCount
+		});
 
 		return {
-			content: [{ kind: 'text', value: `File ${params.actionType}d: ${params.filePath}` }],
+			content: [{ kind: 'text', value: `[EDIT_PAYLOAD]${resultPayload}` }],
 		};
+	}
+}
+
+// ============================================================================
+// Edit File Tool
+// ============================================================================
+
+export class LocalLLMEditFileTool implements IToolImpl {
+
+	constructor(
+		@IFileService private readonly fileService: IFileService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+	) { }
+
+	private getRootUri(params: IEditFileToolParams): URI {
+		if (params.rootUri) { return URI.revive(params.rootUri); }
+		const workspace = this.workspaceService.getWorkspace();
+		return workspace.folders.length > 0 ? workspace.folders[0].uri : URI.file('/');
+	}
+
+	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
+		const params = context.parameters as IEditFileToolParams;
+		const rootUri = this.getRootUri(params);
+		const fileUri = URI.joinPath(rootUri, params.filePath);
+		const fileLink = `[](${fileUri.toString()})`;
+
+		return {
+			invocationMessage: new MarkdownString(`Editing ${fileLink} (lines ${params.startLine}-${params.endLine})...`),
+			pastTenseMessage: new MarkdownString(`Edited ${fileLink}`),
+			confirmationMessages: {
+				title: `Edit File`,
+				message: new MarkdownString(`The AI wants to edit lines ${params.startLine}-${params.endLine} of the file:\n\n\`${params.filePath}\``),
+				allowAutoConfirm: true,
+			},
+		};
+	}
+
+	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, _token: CancellationToken): Promise<IToolResult> {
+		const params = invocation.parameters as IEditFileToolParams;
+		const rootUri = this.getRootUri(params);
+		const fileUri = URI.joinPath(rootUri, params.filePath);
+
+		try {
+			const content = await this.fileService.readFile(fileUri);
+			const text = content.value.toString();
+			const lines = text.split('\n');
+
+			const start = Math.max(0, params.startLine - 1);
+			const end = Math.min(lines.length, Math.max(start, params.endLine));
+
+			// Extract original lines before replacing
+			const originalLines = lines.slice(start, end).join('\n');
+
+			const resultPayload = JSON.stringify({
+				message: `Proposed edit to ${params.filePath} (lines ${params.startLine}-${params.endLine})`,
+				originalContent: originalLines,
+				newContent: params.replacementContent
+			});
+
+			return {
+				content: [{ kind: 'text', value: `[EDIT_PAYLOAD]${resultPayload}` }],
+			};
+		} catch (err) {
+			return {
+				content: [{ kind: 'text', value: `Error editing file '${params.filePath}': ${err instanceof Error ? err.message : String(err)}` }],
+			};
+		}
 	}
 }
 
@@ -518,7 +621,7 @@ export class LocalLLMGrepTool implements IToolImpl {
 					? result.resource.path.substring(folderUri.path.length + 1)
 					: result.resource.fsPath;
 
-			for (const match of result.results || []) {
+				for (const match of result.results || []) {
 					if (resultIsMatch(match)) {
 						const lineNum = match.rangeLocations[0]?.source.startLineNumber ?? 0;
 						matches.push(`${relativePath}:${lineNum + 1}: ${match.previewText.trim()}`);
@@ -687,6 +790,9 @@ export function registerLocalLLMTools(toolsService: ILanguageModelToolsService, 
 
 	toolsService.registerToolData(LocalLLMCreateFileToolData);
 	toolsService.registerToolImplementation(LocalLLMCreateFileToolId, instantiationService.createInstance(LocalLLMCreateFileTool));
+
+	toolsService.registerToolData(LocalLLMEditFileToolData);
+	toolsService.registerToolImplementation(LocalLLMEditFileToolId, instantiationService.createInstance(LocalLLMEditFileTool));
 
 	toolsService.registerToolData(LocalLLMDeleteFileToolData);
 	toolsService.registerToolImplementation(LocalLLMDeleteFileToolId, instantiationService.createInstance(LocalLLMDeleteFileTool));
