@@ -12,7 +12,7 @@ on:
 jobs:
   build-windows:
     name: Windows x64 Build
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Checkout Code
